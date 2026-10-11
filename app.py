@@ -10,6 +10,7 @@ from urllib.parse import quote, urlparse
 import requests
 import streamlit as st
 from gradio_client import Client
+import yt_dlp
 
 st.set_page_config(page_title="Free AI Music Video Studio", page_icon="🎬", layout="centered")
 
@@ -170,6 +171,59 @@ def get_stock_clip(scene: str, topic: str, destination: Path, used: set[str]) ->
             continue
     return None
 
+
+def get_youtube_clip(scene: str, topic: str, destination: Path, used: set[str]) -> tuple[str, str] | None:
+    """Search YouTube for scene-matched clips, using only clips marked Creative Commons."""
+    words = keywords_for(scene, topic)
+    queries = [" ".join(words[:4]), " ".join(words[:2]), topic.strip()]
+    for query in dict.fromkeys(q for q in queries if q):
+        try:
+            with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True, "skip_download": True,
+                                   "extract_flat": "in_playlist", "noplaylist": True,
+                                   "socket_timeout": 15, "retries": 1}) as ydl:
+                result = ydl.extract_info(f"ytsearch8:{query}", download=False)
+            entries = (result or {}).get("entries") or []
+        except Exception:
+            continue
+        for entry in entries:
+            video_id = str((entry or {}).get("id") or "")
+            if not video_id or video_id in used:
+                continue
+            video_url = str((entry or {}).get("url") or "")
+            if not video_url.startswith("http"):
+                video_url = f"https://www.youtube.com/watch?v={video_id}"
+            try:
+                with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True, "skip_download": True,
+                                       "noplaylist": True, "socket_timeout": 15, "retries": 1}) as ydl:
+                    info = ydl.extract_info(video_url, download=False)
+                license_text = str((info or {}).get("license") or "").lower()
+                if "creative commons" not in license_text and "creativecommons.org" not in license_text:
+                    continue
+                duration = float((info or {}).get("duration") or 0)
+                if duration and duration < 3:
+                    continue
+                out_template = str(destination.with_suffix("")) + ".%(ext)s"
+                opts = {"quiet": True, "no_warnings": True, "noplaylist": True,
+                        "format": "best[ext=mp4][height<=1080]/best[height<=1080]/best",
+                        "outtmpl": out_template, "max_filesize": 250_000_000,
+                        "socket_timeout": 20, "retries": 1}
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    ydl.download([video_url])
+                downloaded = [p for p in destination.parent.glob(destination.stem + ".*")
+                              if p.is_file() and p.suffix.lower() in (".mp4", ".mkv", ".webm", ".mov")]
+                if not downloaded:
+                    continue
+                source_file = max(downloaded, key=lambda p: p.stat().st_size)
+                if source_file != destination:
+                    shutil.move(str(source_file), str(destination))
+                if not destination.exists() or destination.stat().st_size < 1000:
+                    continue
+                used.add(video_id)
+                return str((info or {}).get("title") or video_id), video_url
+            except Exception:
+                continue
+    return None
+
 def make_ai_prompt(topic: str, scene: str, index: int, total: int,
                    performance_mode: str, action_intensity: str) -> str:
     """Create an action-led cinematic music-video prompt."""
@@ -323,7 +377,7 @@ def build_mp4(clips: list[Path], audio: Path, output: Path, work: Path,
 
 st.title("🎬 Free Music Video Studio")
 st.write("**MP3 in → MP4 out.** Build a lyric-led music video with cinematic acting, dance performance, or a combination, using your original song.")
-st.info("Free-only best-effort AI generation: the app automatically calls a public Hugging Face LTX-2 open-model Space for short clips. Public free GPU availability, queue times, and quotas are not guaranteed. If generation fails, actor-first mode searches for explicitly licensed live-action footage even when stock preference is set to 0; it will stop rather than substitute abstract animation. No paid API is used.")
+st.info("Free-only best-effort generation: the app tries a public Hugging Face video model first. If that fails, it searches YouTube for clips matching each scene and only downloads clips whose metadata explicitly says Creative Commons, then tries explicitly licensed Internet Archive footage. YouTube metadata can be missing or inaccurate; verify each source's actual license and permissions before publishing or monetizing. No paid API is used.")
 
 topic = st.text_input("1. Video topic", placeholder="e.g. Never give up, motivational song")
 story = st.text_area("2. Story or scene guidance (optional)", placeholder="Describe the storyline, characters, setting, and ending.", height=100)
@@ -426,11 +480,18 @@ if st.button("Generate MP4", type="primary", disabled=not (topic.strip() and son
                             # Stock preference controls preferred scenes, not recovery from an AI failure.
                             # In actor-first mode, always search for licensed live-action footage.
                             if use_stock or require_humans:
-                                found = get_stock_clip(scene, topic.strip(), raw, used_ids)
+                                # Prefer scene-matched YouTube clips explicitly marked Creative Commons.
+                                found = get_youtube_clip(scene, topic.strip(), raw, used_ids)
+                                if not found:
+                                    found = get_stock_clip(scene, topic.strip(), raw, used_ids)
                             if found:
                                 source_title, source_url = found
                                 normalize_stock(raw, normalized, size, scene_seconds)
-                                source_type = "Internet Archive stock footage (check source license)"
+                                source_type = (
+                                    "YouTube clip marked Creative Commons (verify terms before publishing)"
+                                    if "youtube.com/" in source_url or "youtu.be/" in source_url
+                                    else "Internet Archive stock footage (check source license)"
+                                )
                             else:
                                 if require_humans:
                                     raise RuntimeError(
@@ -478,4 +539,4 @@ if st.button("Generate MP4", type="primary", disabled=not (topic.strip() and son
             st.code(str(exc))
             st.caption("Try a shorter MP3 or fewer scenes. The app does not use paid services; processing capacity depends on the available Streamlit server resources.")
 
-st.caption("Uses FFmpeg, the public Internet Archive metadata/search service, and best-effort access to the public Lightricks/LTX-2 Hugging Face Space. Free GPU availability and quotas are controlled by the provider, not this app. Verify stock licenses before reuse.")
+st.caption("Uses FFmpeg, yt-dlp to search YouTube for clips marked Creative Commons, the public Internet Archive metadata/search service, and best-effort access to the public Lightricks/LTX-2 Hugging Face Space. A Creative Commons label is not a substitute for checking actual rights and license terms. Respect platform terms and obtain permission where required.")
