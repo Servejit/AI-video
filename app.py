@@ -591,11 +591,7 @@ flow_character = st.text_input(
     placeholder="e.g. same fictional Punjabi man throughout; consistent face and clothes",
     key="flow_character"
 )
-flow_scene_seconds = st.slider(
-    "F. Approximate scene length in seconds",
-    min_value=3, max_value=12, value=6, key="flow_scene_seconds",
-    help="The prompt asks Flow to use varied scene lengths around this target; the model may not follow exact timing."
-)
+st.caption("F. Google Flow clip: fixed at 30 seconds, with 5 unique scenes of approximately 6 seconds each.")
 
 def make_single_flow_prompt(song_duration: float, theme: str, lyrics_text: str,
                             visual_style: str, character: str, target_scene_seconds: int) -> str:
@@ -707,7 +703,7 @@ if flow_generate:
                 flow_duration = probe_duration(flow_temp_audio)
             flow_prompt = make_single_flow_prompt(
                 flow_duration, flow_theme, flow_lyrics, flow_style,
-                flow_character, flow_scene_seconds
+                flow_character, 6
             )
             st.session_state["generated_flow_master_prompt"] = flow_prompt
             st.session_state["generated_flow_song_name"] = flow_song.name
