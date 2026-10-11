@@ -131,7 +131,7 @@ def download_media(url: str, destination: Path) -> None:
 
 def get_stock_clip(scene: str, topic: str, destination: Path, used: set[str]) -> tuple[str, str] | None:
     words = keywords_for(scene, topic)
-    queries = [" ".join(words[:4]), " ".join(words[:2]), topic.strip()]
+    # Always include human-action searches so an AI outage does not mean we only\n    # search for scenery implied by the story text. These remain subject to the\n    # explicit-license allowlist below.\n    queries = [" ".join(words[:4]), " ".join(words[:2]), topic.strip(),\n               "people walking", "man and woman talking", "people working", "people helping"]
     for query in dict.fromkeys(q for q in queries if q):
         try:
             for item in search_archive(query):
@@ -288,7 +288,7 @@ def build_mp4(clips: list[Path], audio: Path, output: Path, work: Path,
 
 st.title("🎬 Free Music Video Studio")
 st.write("**MP3 in → MP4 out.** Automatically try to generate photorealistic AI video scenes using a public open-model GPU Space, then finish the music video with your original song.")
-st.info("Free-only best-effort AI generation: the app automatically calls a public Hugging Face LTX-2 open-model Space for short clips. Public free GPU availability, queue times, and quotas are not guaranteed. If generation is unavailable, the app falls back to explicitly licensed footage and animated scenes so MP4 export can still work. No paid API is used.")
+st.info("Free-only best-effort AI generation: the app automatically calls a public Hugging Face LTX-2 open-model Space for short clips. Public free GPU availability, queue times, and quotas are not guaranteed. If generation fails, actor-first mode searches for explicitly licensed live-action footage even when stock preference is set to 0; it will stop rather than substitute abstract animation. No paid API is used.")
 
 topic = st.text_input("1. Video topic", placeholder="e.g. Never give up, motivational song")
 story = st.text_area("2. Story or scene guidance (optional)", placeholder="Write a short story or put one scene on each line.", height=120)
