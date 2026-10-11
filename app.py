@@ -232,7 +232,7 @@ with st.expander("API access setup", expanded=True):
     st.markdown(
         "Only fal.ai needs an API key. Stock footage is searched from Internet Archive without a key. "
         "Keep keys private. [Get a fal.ai key](https://fal.ai/dashboard/keys) · "
-        "[Get a Internet Archive API key](https://archive.com/api/docs/)"
+        "[Internet Archive video collection](https://archive.org/details/movies)"
     )
     fal_key = get_secret("FAL_KEY", "fal.ai API key (required when AI clips are selected)", "Used privately by the server to request AI-generated video.")
 
@@ -304,7 +304,7 @@ if st.button("Generate music video", type="primary", disabled=not (topic.strip()
                     if item["source"]:
                         st.markdown(f"[View source clip]({item['source']})")
                     st.caption(item["prompt"])
-                st.markdown("Stock footage provided by [Internet Archive](https://archive.com/).")
+                st.markdown("Stock footage searched from [Internet Archive](https://archive.org/details/movies). Review each clip’s source page and license before publishing.")
         except Exception as exc:
             st.error("The video could not be created.")
             st.code(str(exc))
