@@ -1,5 +1,5 @@
 """Automatic hybrid AI + stock-footage music video maker.
-Upload a song and topic/story; fetch Pixabay footage and generate clips with fal.ai.
+Upload a song and topic/story; search public Internet Archive footage without a stock API key and generate clips with fal.ai.
 No captions, lyrics, subtitles, or text overlays are added.
 """
 from __future__ import annotations
@@ -16,7 +16,8 @@ FORMATS = {
     "Square video (1:1)": ((900, 900), "1:1", "square"),
 }
 AUDIO_TYPES = ["mp3", "wav", "m4a", "aac", "ogg", "flac"]
-PIXABAY_VIDEO_SEARCH = "https://pixabay.com/api/videos/"
+ARCHIVE_SEARCH = "https://archive.org/advancedsearch.php"
+ARCHIVE_METADATA = "https://archive.org/metadata/"
 FAL_ENDPOINT = "fal-ai/wan/v2.2-5b/text-to-video"
 NEGATIVE_PROMPT = "subtitles, captions, text, letters, logos, watermarks, still image, static frame, low quality, blurry, distorted anatomy"
 
@@ -85,48 +86,79 @@ def download_https(url: str, target: Path, max_bytes: int = 250_000_000) -> None
     if not target.exists() or target.stat().st_size < 1024:
         raise RuntimeError("Media download was empty or incomplete.")
 
-def search_pixabay(query: str, api_key: str) -> list[dict]:
-    response = requests.get(PIXABAY_VIDEO_SEARCH,
-        params={"key": api_key, "q": query[:100], "per_page": 12, "safesearch": "true",
-                "order": "popular"}, timeout=30)
-    if response.status_code in (401, 403):
-        raise RuntimeError("Pixabay rejected the API key. Check PIXABAY_API_KEY.")
+def search_archive(query: str) -> list[dict]:
+    # Public Internet Archive search endpoint; no API key is required.
+    terms = re.sub(r"[^A-Za-z0-9 ]", " ", query).strip()
+    terms = " ".join(terms.split()[:7])
+    if not terms:
+        return []
+    response = requests.get(ARCHIVE_SEARCH, params={
+        "q": f"mediatype:movies AND {terms}",
+        "fl[]": ["identifier", "title", "description", "licenseurl"],
+        "rows": 12, "page": 1, "output": "json"
+    }, timeout=35)
     response.raise_for_status()
-    return response.json().get("hits", [])
+    return response.json().get("response", {}).get("docs", [])
 
-def choose_pixabay_file(video: dict, target_size: tuple[int, int]) -> str | None:
-    files = video.get("videos", {})
+def archive_metadata(identifier: str) -> dict:
+    response = requests.get(f"{ARCHIVE_METADATA}{identifier}", timeout=35)
+    response.raise_for_status()
+    return response.json()
+
+def archive_license_allowed(metadata: dict) -> bool:
+    # Require an explicit public-domain or Creative Commons license in item metadata.
+    license_text = " ".join(str(metadata.get(k, "")) for k in ("licenseurl", "rights", "license")).lower()
+    return any(term in license_text for term in (
+        "creativecommons.org/publicdomain", "creativecommons.org/licenses/by/",
+        "creativecommons.org/licenses/by-sa/", "creativecommons.org/licenses/zero/"
+    ))
+
+def choose_archive_video(metadata: dict, size: tuple[int, int]) -> str | None:
     candidates = []
-    for quality in ("large", "medium", "small", "tiny"):
-        item = files.get(quality, {})
-        if item.get("url"):
-            candidates.append(item)
+    for item in metadata.get("files", []):
+        name = str(item.get("name", ""))
+        fmt = str(item.get("format", "")).lower()
+        if name.lower().endswith((".mp4", ".m4v", ".mov", ".webm")) or "mpeg4" in fmt or "webm" in fmt:
+            try:
+                file_size = int(item.get("size") or 0)
+            except (TypeError, ValueError):
+                file_size = 0
+            if file_size >= 200_000 and not name.lower().endswith(("_thumb.mp4", "_preview.mp4")):
+                candidates.append((file_size, name))
     if not candidates:
         return None
-    tw, th = target_size
-    def score(item: dict) -> tuple:
-        w, h = int(item.get("width") or 0), int(item.get("height") or 0)
-        return (abs(w / h - tw / th) if h else 10, 0 if w >= min(tw, th) else 1, -(w * h))
-    return sorted(candidates, key=score)[0].get("url")
+    candidates.sort(key=lambda x: (0 if x[1].lower().endswith(".mp4") else 1,
+                                   abs(min(x[0], 150_000_000) - 35_000_000)))
+    return candidates[0][1]
 
-def get_stock_clip(scene: str, api_key: str, orientation: str, size: tuple[int, int],
-                   target: Path, used_ids: set[int]) -> tuple[str, str]:
-    queries = list(dict.fromkeys([scene.split(".")[0][:90], " ".join(scene.split()[:6])]))
+def get_stock_clip(scene: str, orientation: str, size: tuple[int, int],
+                   target: Path, used_ids: set[str]) -> tuple[str, str]:
+    queries = list(dict.fromkeys([scene.split(".")[0][:90], " ".join(scene.split()[:6]),
+                                  " ".join(scene.split()[:3])]))
     for query in queries:
-        videos = search_pixabay(query, api_key)
-        candidates = [v for v in videos if int(v.get("id") or 0) not in used_ids] or videos
-        for video in candidates:
-            link = choose_pixabay_file(video, size)
-            if not link:
+        for item in search_archive(query):
+            identifier = str(item.get("identifier", ""))
+            if not identifier or identifier in used_ids:
                 continue
             try:
-                download_https(link, target)
-                used_ids.add(int(video.get("id") or 0))
-                creator = video.get("user", "Pixabay contributor")
-                return f"Stock footage from Pixabay — {creator}", video.get("pageURL", "https://pixabay.com/videos/")
-            except (requests.RequestException, RuntimeError):
+                data = archive_metadata(identifier)
+                meta = data.get("metadata", {})
+                if not archive_license_allowed(meta):
+                    continue
+                filename = choose_archive_video(data, size)
+                if not filename:
+                    continue
+                media_url = f"https://archive.org/download/{identifier}/{requests.utils.quote(filename, safe='/')}"
+                download_https(media_url, target, max_bytes=250_000_000)
+                used_ids.add(identifier)
+                title = meta.get("title") or item.get("title") or identifier
+                return f"Internet Archive footage — {title} (CC/public domain)", f"https://archive.org/details/{identifier}"
+            except (requests.RequestException, RuntimeError, ValueError):
                 continue
-    raise RuntimeError(f"No downloadable Pixabay clip found for scene: {queries[-1]}")
+    raise RuntimeError(
+        f"No downloadable public-domain/Creative Commons video was found for: {queries[-1]}. "
+        "Try a simpler topic (for example nature, mountains, city, ocean) or increase the AI footage percentage."
+    )
 
 def generate_ai_clip(prompt: str, api_key: str, aspect_ratio: str, target: Path, status_line) -> None:
     base = f"https://queue.fal.run/{FAL_ENDPOINT}"
@@ -194,16 +226,15 @@ def assemble_video(clips: list[Path], audio: Path, output: Path, work: Path,
 
 st.title("🎬 AI Music Video Studio")
 st.write("Upload a song and enter a topic/story. The app automatically combines original AI-generated clips with real stock footage.")
-st.info("No captions, lyrics, subtitles, or text overlays. AI generation through fal.ai may incur charges; stock footage comes from Pixabay.")
+st.info("No captions, lyrics, subtitles, or text overlays. AI generation through fal.ai may incur charges; stock footage comes from Internet Archive.")
 
 with st.expander("API access setup", expanded=True):
     st.markdown(
-        "Configure Streamlit secrets named FAL_KEY and PIXABAY_API_KEY, or enter keys below. "
+        "Only fal.ai needs an API key. Stock footage is searched from Internet Archive without a key. "
         "Keep keys private. [Get a fal.ai key](https://fal.ai/dashboard/keys) · "
-        "[Get a Pixabay API key](https://pixabay.com/api/docs/)"
+        "[Get a Internet Archive API key](https://archive.com/api/docs/)"
     )
     fal_key = get_secret("FAL_KEY", "fal.ai API key (required when AI clips are selected)", "Used privately by the server to request AI-generated video.")
-    pixabay_key = get_secret("PIXABAY_API_KEY", "Pixabay API key (required when stock clips are selected)", "Used privately to search and download stock video.")
 
 topic = st.text_input("1. Video topic", placeholder="e.g. Never give up, Punjabi motivational song")
 story = st.text_area("2. Story or scene guidance (optional)",
@@ -211,7 +242,7 @@ story = st.text_area("2. Story or scene guidance (optional)",
 song = st.file_uploader("3. Upload your soundtrack", type=AUDIO_TYPES)
 format_name = st.selectbox("4. Video format", list(FORMATS.keys()))
 mix = st.slider("AI-generated footage in the mix (%)", 0, 100, 40, 20,
-    help="Remaining scenes use real stock footage from Pixabay. AI generation may be billed by the provider.")
+    help="Remaining scenes use real stock footage from Internet Archive. AI generation may be billed by the provider.")
 scene_count = st.slider("Number of scenes", 2, 12, 6)
 st.caption("Each AI scene is a short clip. The app repeats the scene sequence if needed to cover the song.")
 
@@ -221,8 +252,6 @@ if st.button("Generate music video", type="primary", disabled=not (topic.strip()
     stock_count = scene_count - ai_count
     if ai_count and not fal_key:
         st.error("Enter a fal.ai API key or configure FAL_KEY in Streamlit secrets.")
-    elif stock_count and not pixabay_key:
-        st.error("Enter a Pixabay API key or configure PIXABAY_API_KEY in Streamlit secrets.")
     elif not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
         st.error("FFmpeg and FFprobe are required. Ensure ffmpeg is listed in packages.txt and the app has redeployed.")
     else:
@@ -237,7 +266,7 @@ if st.button("Generate music video", type="primary", disabled=not (topic.strip()
             ai_slots.add(next(i for i in range(scene_count) if i not in ai_slots))
         progress = st.progress(0, text="Preparing your scenes…")
         credits = []
-        used_ids: set[int] = set()
+        used_ids: set[str] = set()
         try:
             with tempfile.TemporaryDirectory(prefix="ai_music_video_") as temp_dir:
                 work = Path(temp_dir)
@@ -255,7 +284,7 @@ if st.button("Generate music video", type="primary", disabled=not (topic.strip()
                             lambda message: status.info(f"Scene {index + 1}/{scene_count}: {message}"))
                         source_label, source_url = "AI-generated footage (fal.ai)", ""
                     else:
-                        source_label, source_url = get_stock_clip(scene, pixabay_key, orientation, size, raw, used_ids)
+                        source_label, source_url = get_stock_clip(scene, orientation, size, raw, used_ids)
                     normalize_clip(raw, normalized, size)
                     normalized_clips.append(normalized)
                     credits.append({"scene": index + 1, "type": source_label, "source": source_url, "prompt": scene})
@@ -275,10 +304,10 @@ if st.button("Generate music video", type="primary", disabled=not (topic.strip()
                     if item["source"]:
                         st.markdown(f"[View source clip]({item['source']})")
                     st.caption(item["prompt"])
-                st.markdown("Stock footage provided by [Pixabay](https://pixabay.com/).")
+                st.markdown("Stock footage provided by [Internet Archive](https://archive.com/).")
         except Exception as exc:
             st.error("The video could not be created.")
             st.code(str(exc))
             st.caption("Check API keys, provider credits/limits, internet access, and FFmpeg deployment logs.")
 
-st.caption("Use AI provider services according to their terms. Pixabay footage is subject to the Pixabay Content License and API guidelines.")
+st.caption("Use AI provider services according to their terms. Internet Archive items have item-specific rights; review each source page and license before publishing.")
