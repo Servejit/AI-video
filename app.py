@@ -254,7 +254,7 @@ story = st.text_area("2. Story or scene guidance (optional)",
 song = st.file_uploader("3. Upload your soundtrack", type=AUDIO_TYPES)
 format_name = st.selectbox("4. Video format", list(FORMATS.keys()))
 mix = st.slider("AI-generated footage in the mix (%)", 0, 100, 40, 20,
-    help="Remaining scenes use real stock footage from Internet Archive. AI generation may be billed by the provider.")
+    help="Remaining scenes use real stock footage from Internet Archive. Wan 2.1 runs in your own Colab session; no paid video API is called.")
 scene_count = st.slider("Number of scenes", 2, 12, 6)
 st.caption("Wan 2.1 generates short 480p clips. The app resizes them to your selected format and repeats the scene sequence if needed to cover the song. Vertical/square formats are cropped from the generated landscape clip.")
 
