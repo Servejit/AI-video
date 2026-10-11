@@ -374,7 +374,9 @@ if st.button("Generate MP4", type="primary", disabled=not (topic.strip() and son
                                 f"Free AI generation unavailable for scene {index + 1}; "
                                 "trying the free footage/animation fallback."
                             )
-                            if use_stock:
+                            # Stock preference controls preferred scenes, not recovery from an AI failure.
+                            # In actor-first mode, always search for licensed live-action footage.
+                            if use_stock or require_humans:
                                 found = get_stock_clip(scene, topic.strip(), raw, used_ids)
                             if found:
                                 source_title, source_url = found
