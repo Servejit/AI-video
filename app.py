@@ -171,57 +171,41 @@ def get_stock_clip(scene: str, orientation: str, size: tuple[int, int],
         "Try a simpler topic (for example nature, mountains, city, ocean) or increase the AI footage percentage."
     )
 
-def generate_ai_clip(prompt: str, api_key: str, aspect_ratio: str, target: Path, status_line) -> None:
-    base = f"https://queue.fal.run/{FAL_ENDPOINT}"
-    headers = {"Authorization": f"Key {api_key}", "Content-Type": "application/json"}
-    payload = {"prompt": prompt, "negative_prompt": NEGATIVE_PROMPT, "aspect_ratio": aspect_ratio,
-               "resolution": "720p", "enable_safety_checker": True, "enable_prompt_expansion": True}
-    response = requests.post(base, headers=headers, json=payload, timeout=60)
-    if response.status_code in (401, 403):
-        try:
-            detail = response.json()
-        except ValueError:
-            detail = response.text[:800]
-        if response.status_code == 401:
-            raise RuntimeError(
-                "fal.ai returned HTTP 401 (authentication failed). Check that the complete, current key was copied from "
-                "https://fal.ai/dashboard/keys and that Streamlit is not using an older FAL_KEY secret. "
-                f"Provider detail: {str(detail)[:800]}"
-            )
-        raise RuntimeError(
-            "fal.ai returned HTTP 403 (access denied). The key may be valid, but the account/key may lack access to this model "
-            "or the account may have a restriction. Check fal.ai account/model access. "
-            f"Provider detail: {str(detail)[:800]}"
-        )
+def generate_ai_clip(prompt: str, endpoint: str, token: str, aspect_ratio: str, target: Path, status_line) -> None:
+    """Request a clip from the user's temporary, self-hosted Wan 2.1 Colab runtime."""
+    base = endpoint.strip().rstrip("/")
+    if not base.startswith("https://"):
+        raise RuntimeError("Colab endpoint must be the HTTPS trycloudflare.com URL printed by the notebook.")
+    headers = {"X-API-Token": token}
+    response = requests.post(
+        f"{base}/generate",
+        headers=headers,
+        json={"prompt": prompt, "width": 832, "height": 480, "num_frames": 33, "num_inference_steps": 20},
+        timeout=60,
+    )
     if not response.ok:
-        raise RuntimeError(f"fal.ai request failed with HTTP {response.status_code}: {response.text[:1000]}")
-
-    data = response.json()
-    request_id = data.get("request_id")
-    status_url = data.get("status_url") or (f"{base}/requests/{request_id}/status" if request_id else "")
-    result_url = data.get("response_url") or (f"{base}/requests/{request_id}" if request_id else "")
-    if not request_id or not status_url or not result_url:
-        raise RuntimeError("fal.ai did not return a valid queued request ID.")
-    deadline = time.time() + 900
+        raise RuntimeError(f"Colab Wan server returned HTTP {response.status_code}: {response.text[:1000]}")
+    job_id = response.json().get("job_id")
+    if not job_id:
+        raise RuntimeError("Colab Wan server did not return a job ID. Restart the Colab notebook and try again.")
+    deadline = time.time() + 1200
     while time.time() < deadline:
-        check = requests.get(status_url, headers={"Authorization": f"Key {api_key}"}, timeout=30)
+        check = requests.get(f"{base}/status/{job_id}", headers=headers, timeout=30)
         check.raise_for_status()
-        status_data = check.json()
-        status = str(status_data.get("status", "")).upper()
-        status_line(f"AI clip status: {status or 'waiting'}…")
-        if status == "COMPLETED":
-            break
-        if status in ("FAILED", "CANCELLED"):
-            raise RuntimeError("fal.ai generation failed: " + json.dumps(status_data)[:1000])
-        time.sleep(3)
-    else:
-        raise RuntimeError("AI generation exceeded 15 minutes. Try fewer AI clips.")
-    result_response = requests.get(result_url, headers={"Authorization": f"Key {api_key}"}, timeout=60)
-    result_response.raise_for_status()
-    video_url = (result_response.json().get("video") or {}).get("url")
-    if not video_url:
-        raise RuntimeError("fal.ai response did not include a video URL.")
-    download_https(video_url, target)
+        info = check.json()
+        status = str(info.get("status", "")).lower()
+        status_line(f"Wan 2.1 on Colab: {status or 'waiting'}…")
+        if status == "completed":
+            video = requests.get(f"{base}/download/{job_id}", headers=headers, timeout=180)
+            video.raise_for_status()
+            target.write_bytes(video.content)
+            if target.stat().st_size < 1024:
+                raise RuntimeError("Colab returned an empty video. Check the notebook output for errors.")
+            return
+        if status == "failed":
+            raise RuntimeError("Wan 2.1 generation failed in Colab: " + str(info.get("error", "Unknown error"))[:1200])
+        time.sleep(4)
+    raise RuntimeError("Wan 2.1 generation took over 20 minutes. The free Colab runtime may be overloaded or disconnected.")
 
 def normalize_clip(source: Path, target: Path, size: tuple[int, int]) -> None:
     w, h = size
@@ -252,16 +236,18 @@ def assemble_video(clips: list[Path], audio: Path, output: Path, work: Path,
         "-b:a", "192k", "-af", "aresample=async=1", "-shortest", "-movflags", "+faststart", str(output)])
 
 st.title("🎬 AI Music Video Studio")
-st.write("Upload a song and enter a topic/story. The app automatically combines original AI-generated clips with real stock footage.")
-st.info("No captions, lyrics, subtitles, or text overlays. AI generation through fal.ai may incur charges; stock footage comes from Internet Archive.")
+st.write("Upload a song and enter a topic/story. Generate short clips with open-source Wan 2.1 running on your own Google Colab GPU session, then combine them with your soundtrack.")
+st.info("No paid video API is used. Wan 2.1 is open source; Google Colab free GPU availability and session duration are controlled by Google. Stock footage can be used for scenes you do not generate with AI.")
 
-with st.expander("API access setup", expanded=True):
+with st.expander("Connect free open-source AI (Google Colab)", expanded=True):
     st.markdown(
-        "Only fal.ai needs an API key. Stock footage is searched from Internet Archive without a key. "
-        "Keep keys private. [Get a fal.ai key](https://fal.ai/dashboard/keys) · "
-        "[Internet Archive video collection](https://archive.org/details/movies)"
+        "1. Open the [Wan 2.1 Colab notebook in this GitHub repository](https://github.com/Servejit/AI-video/blob/main/wan_colab.ipynb). "
+        "2. Open it in Google Colab and run the cells using **Runtime → Change runtime type → T4 GPU** (if available). "
+        "3. Copy the HTTPS tunnel URL and access token printed by the final cell into the fields below. "
+        "Keep the token private. The notebook must stay running while your Streamlit app generates clips."
     )
-    fal_key = get_secret("FAL_KEY", "fal.ai API key (required when AI clips are selected)", "Used privately by the server to request AI-generated video.")
+    colab_url = st.text_input("Colab HTTPS endpoint URL", placeholder="https://example.trycloudflare.com").strip().rstrip("/")
+    colab_token = st.text_input("Colab access token", type="password", help="Paste the token printed by your Colab notebook.").strip()
 
 topic = st.text_input("1. Video topic", placeholder="e.g. Never give up, Punjabi motivational song")
 story = st.text_area("2. Story or scene guidance (optional)",
@@ -271,14 +257,16 @@ format_name = st.selectbox("4. Video format", list(FORMATS.keys()))
 mix = st.slider("AI-generated footage in the mix (%)", 0, 100, 40, 20,
     help="Remaining scenes use real stock footage from Internet Archive. AI generation may be billed by the provider.")
 scene_count = st.slider("Number of scenes", 2, 12, 6)
-st.caption("Each AI scene is a short clip. The app repeats the scene sequence if needed to cover the song.")
+st.caption("Wan 2.1 generates short 480p clips. The app resizes them to your selected format and repeats the scene sequence if needed to cover the song. Vertical/square formats are cropped from the generated landscape clip.")
 
 if st.button("Generate music video", type="primary", disabled=not (topic.strip() and song)):
     size, aspect_ratio, orientation = FORMATS[format_name]
     ai_count = round(scene_count * mix / 100)
     stock_count = scene_count - ai_count
-    if ai_count and not fal_key:
-        st.error("Enter a fal.ai API key or configure FAL_KEY in Streamlit secrets.")
+    if ai_count and (not colab_url or not colab_token):
+        st.error("For AI-generated scenes, start the Wan 2.1 Google Colab notebook and enter its HTTPS endpoint URL and access token. Set AI-generated footage to 0% to use only stock footage without connecting Colab.")
+    elif ai_count and not colab_url.startswith("https://"):
+        st.error("The Colab endpoint must start with https://.")
     elif not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
         st.error("FFmpeg and FFprobe are required. Ensure ffmpeg is listed in packages.txt and the app has redeployed.")
     else:
@@ -305,11 +293,11 @@ if st.button("Generate music video", type="primary", disabled=not (topic.strip()
                     normalized = work / f"clip_{index:03d}.mp4"
                     is_ai = index in ai_slots
                     status = st.empty()
-                    status.info(f"Scene {index + 1}/{scene_count}: {'Generating AI footage' if is_ai else 'Searching stock footage'}")
+                    status.info(f"Scene {index + 1}/{scene_count}: {'Generating open-source Wan 2.1 footage on Colab' if is_ai else 'Searching stock footage'}")
                     if is_ai:
-                        generate_ai_clip(scene, fal_key, aspect_ratio, raw,
+                        generate_ai_clip(scene, colab_url, colab_token, aspect_ratio, raw,
                             lambda message: status.info(f"Scene {index + 1}/{scene_count}: {message}"))
-                        source_label, source_url = "AI-generated footage (fal.ai)", ""
+                        source_label, source_url = "AI-generated footage (Wan 2.1, Google Colab)", ""
                     else:
                         source_label, source_url = get_stock_clip(scene, orientation, size, raw, used_ids)
                     normalize_clip(raw, normalized, size)
@@ -335,6 +323,6 @@ if st.button("Generate music video", type="primary", disabled=not (topic.strip()
         except Exception as exc:
             st.error("The video could not be created.")
             st.code(str(exc))
-            st.caption("Check API keys, provider credits/limits, internet access, and FFmpeg deployment logs.")
+            st.caption("For Wan 2.1 errors, confirm the Colab runtime is still connected and the endpoint/token match. Free GPU access is not guaranteed. Check the Colab cell output for model or memory errors.")
 
-st.caption("Use AI provider services according to their terms. Internet Archive items have item-specific rights; review each source page and license before publishing.")
+st.caption("Wan 2.1 model: Apache-2.0 license. Internet Archive items have item-specific rights; review each source page and license before publishing.")
