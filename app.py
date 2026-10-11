@@ -1,14 +1,15 @@
-"""Free MP3-to-MP4 music video maker.
-Uses explicitly licensed Internet Archive footage where available and animated
-visualizer scenes as a fallback. No paid APIs, no Colab, no captions/lyrics/text overlays.
+"""Free MP3-to-MP4 music video maker with best-effort public open-model video generation.
+Uses a public Hugging Face LTX-2 Space for short AI-generated scenes when available,
+then falls back to licensed footage and local FFmpeg animation. No paid APIs or Colab.
 """
 from __future__ import annotations
-import math, re, shutil, subprocess, tempfile
+import math, os, re, shutil, subprocess, tempfile
 from pathlib import Path
 from urllib.parse import quote, urlparse
 
 import requests
 import streamlit as st
+from gradio_client import Client
 
 st.set_page_config(page_title="Free AI Music Video Studio", page_icon="🎬", layout="centered")
 
@@ -156,6 +157,54 @@ def get_stock_clip(scene: str, topic: str, destination: Path, used: set[str]) ->
             continue
     return None
 
+def make_ai_prompt(topic: str, scene: str, index: int, total: int) -> str:
+    """Turn a story beat into a short, photorealistic cinematic music-video shot."""
+    continuity = (
+        "Keep the same fictional lead character throughout the music video: "
+        "a photorealistic South Asian man in his early 30s, short dark hair, "
+        "subtle stubble, expressive eyes, wearing a charcoal jacket and plain dark shirt. "
+        "Natural human anatomy, realistic skin texture, believable movement."
+    )
+    return (
+        f"Photorealistic live-action cinematic music album video, shot {index + 1} of {total}. "
+        f"Story theme: {topic}. Specific action: {scene}. {continuity} "
+        "One continuous 3-second shot with clear visible physical action, natural facial expression, "
+        "cinematic camera movement, realistic lens depth of field, filmic contrast, practical lighting, "
+        "subtle atmospheric haze, beautifully composed frame, premium feature-film cinematography. "
+        "No text, no subtitles, no logos, no watermarks, no collage, no split screen."
+    )
+
+def generate_ai_clip(prompt: str, target: Path, size: tuple[int, int], seed: int) -> None:
+    """Call a public open-model Hugging Face Space. Availability and free GPU quota are not guaranteed."""
+    # The public LTX-2 Space exposes a Gradio endpoint. No paid API is used.
+    # A free HF token can be added as Streamlit secret HF_TOKEN for account quota,
+    # but the app also attempts unauthenticated access.
+    token = os.environ.get("HF_TOKEN") or None
+    client = Client("Lightricks/ltx-2", token=token, verbose=False)
+    width, height = size
+    # Keep generations small to fit shared/free GPU limits.
+    width, height = (768, 512) if width >= height else (512, 768)
+    result = client.predict(
+        None, prompt, 3.0, True,
+        "shaky, glitchy, low quality, deformed anatomy, distorted face, fused fingers, "
+        "extra limbs, motion smear, static image, text, subtitles, watermark",
+        int(seed % 2147483647), True, 8, 3.0, height, width,
+        api_name="/generate_video",
+    )
+    video_value = result[0] if isinstance(result, (tuple, list)) else result
+    if not video_value:
+        raise RuntimeError("The free AI video Space returned no video file.")
+    # gradio_client normally downloads returned video files to a local cache path.
+    video_path = Path(str(video_value))
+    if not video_path.is_file():
+        raise RuntimeError(
+            "The AI provider returned a video reference that was not downloaded locally. "
+            "Try again later or use the hybrid fallback."
+        )
+    shutil.copy2(video_path, target)
+    if target.stat().st_size < 1000:
+        raise RuntimeError("The AI provider returned an empty or invalid clip.")
+
 def normalize_stock(source: Path, target: Path, size: tuple[int, int], seconds: float) -> None:
     w, h = size
     vf = (f"scale={w}:{h}:force_original_aspect_ratio=increase,"
@@ -230,22 +279,22 @@ def build_mp4(clips: list[Path], audio: Path, output: Path, work: Path,
     ])
 
 st.title("🎬 Free Music Video Studio")
-st.write("**MP3 in → MP4 out.** Build a cinematic music video from your own AI-generated actor clips, free licensed stock footage, and animated scenes.")
-st.info("Free-only workflow: no paid APIs and no API key. This hosted app does not have enough guaranteed GPU capacity to generate photorealistic AI actors itself. For realistic AI acting, generate clips with a free/open-source video model on compatible local hardware, then upload them below. The app edits those clips to your MP3; if you do not upload enough clips, it can use explicitly licensed stock footage or locally generated animated scenes.")
+st.write("**MP3 in → MP4 out.** Automatically try to generate photorealistic AI video scenes using a public open-model GPU Space, then finish the music video with your original song.")
+st.info("Free-only best-effort AI generation: the app automatically calls a public Hugging Face LTX-2 open-model Space for short clips. Public free GPU availability, queue times, and quotas are not guaranteed. If generation is unavailable, the app falls back to explicitly licensed footage and animated scenes so MP4 export can still work. No paid API is used.")
 
 topic = st.text_input("1. Video topic", placeholder="e.g. Never give up, motivational song")
 story = st.text_area("2. Story or scene guidance (optional)", placeholder="Write a short story or put one scene on each line.", height=120)
 song = st.file_uploader("3. Upload your MP3", type=["mp3"])
 ai_clips = st.file_uploader(
-    "4. Optional: upload AI-generated actor scene clips",
+    "4. Optional: override automatic generation with your own AI clips",
     type=["mp4", "mov", "m4v", "webm"], accept_multiple_files=True,
-    help="Upload short clips generated with a free/open-source video model. They are used in upload order and trimmed/looped to fit the soundtrack. No clip is generated by a paid API."
+    help="Optional only. If you do not upload clips, the app tries to generate photorealistic AI clips automatically using a public open-model Space. Uploaded clips take priority."
 )
 format_name = st.selectbox("5. Video format", list(FORMATS.keys()))
-scene_count = st.slider("6. Number of scenes", 3, 12, 6)
+scene_count = st.slider("6. Number of scenes / AI generation attempts", 2, 8, 3)
 stock_percent = st.slider("7. Stock footage preference (%)", 0, 100, 70, 10,
     help="Higher values try more free licensed footage. If suitable footage cannot be found, the app creates animated scenes instead.")
-st.caption("No captions, lyrics, subtitles, or text overlays are added. Uploaded AI clips take priority, in upload order. Remaining scenes can use licensed stock footage or animated visuals. Scene durations are matched to the MP3.")
+st.caption("No captions, lyrics, subtitles, or text overlays are added. Automatic AI shots are short and may repeat to cover a full-length song. For best results, start with 2–3 scenes; public free GPU quotas can run out.")
 
 if st.button("Generate MP4", type="primary", disabled=not (topic.strip() and song)):
     if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
@@ -295,19 +344,36 @@ if st.button("Generate MP4", type="primary", disabled=not (topic.strip() and son
                         source_type = "User-uploaded AI-generated scene clip"
                         source_title = ai_source.name
                     else:
-                        status.info(f"Scene {index + 1}/{scene_count}: " +
-                                    ("Searching for free licensed footage…" if use_stock else "Creating animated scene…"))
-                        if use_stock:
-                            found = get_stock_clip(scene, topic.strip(), raw, used_ids)
-                        if found:
-                            source_title, source_url = found
+                        ai_error = ""
+                        status.info(f"Scene {index + 1}/{scene_count}: trying public open-model AI video generation…")
+                        try:
+                            generate_ai_clip(
+                                make_ai_prompt(topic.strip(), scene, index, scene_count),
+                                raw, size, index + len(topic) * 17,
+                            )
                             normalize_stock(raw, normalized, size, scene_seconds)
-                            source_type = "Internet Archive stock footage (check source license)"
-                        else:
-                            make_animated_scene(normalized, size, scene_seconds, index + len(topic))
-                            source_type = "Locally generated animated visual"
+                            source_type = "AI-generated photorealistic scene (public LTX-2 Space)"
+                            source_title = "Generated automatically; open-model public GPU availability is not guaranteed."
+                        except Exception as exc:
+                            ai_error = str(exc)[:500]
+                            status.warning(
+                                f"Free AI generation unavailable for scene {index + 1}; "
+                                "trying the free footage/animation fallback."
+                            )
                             if use_stock:
-                                source_title = "No suitable explicitly licensed stock clip found; animated scene used instead."
+                                found = get_stock_clip(scene, topic.strip(), raw, used_ids)
+                            if found:
+                                source_title, source_url = found
+                                normalize_stock(raw, normalized, size, scene_seconds)
+                                source_type = "Internet Archive stock footage (check source license)"
+                            else:
+                                make_animated_scene(normalized, size, scene_seconds, index + len(topic))
+                                source_type = "Locally generated animated visual (AI fallback)"
+                                source_title = (
+                                    "AI generation failed: " + ai_error
+                                    if ai_error else
+                                    "No suitable explicitly licensed stock clip found; animated scene used instead."
+                                )
                     clips.append(normalized)
                     credits.append({"scene": index + 1, "description": scene,
                                     "type": source_type, "title": source_title, "url": source_url})
@@ -336,4 +402,4 @@ if st.button("Generate MP4", type="primary", disabled=not (topic.strip() and son
             st.code(str(exc))
             st.caption("Try a shorter MP3 or fewer scenes. The app does not use paid services; processing capacity depends on the available Streamlit server resources.")
 
-st.caption("Uses FFmpeg and the public Internet Archive metadata/search service. Stock footage is optional and item-specific licensing must be verified before reuse.")
+st.caption("Uses FFmpeg, the public Internet Archive metadata/search service, and best-effort access to the public Lightricks/LTX-2 Hugging Face Space. Free GPU availability and quotas are controlled by the provider, not this app. Verify stock licenses before reuse.")
