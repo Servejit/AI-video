@@ -1,6 +1,6 @@
-"""Automatic hybrid AI + stock-footage music video maker.
-Upload a song and topic/story; search public Internet Archive footage without a stock API key and generate clips with fal.ai.
-No captions, lyrics, subtitles, or text overlays are added.
+"""Open-source AI + stock-footage music video maker.
+Upload a song and topic/story; generate clips with Wan 2.1 running in the user's Google Colab GPU session.
+Stock footage is searched from Internet Archive. No paid video API, captions, lyrics, subtitles, or text overlays.
 """
 from __future__ import annotations
 import json, math, re, shutil, subprocess, tempfile, time
@@ -18,7 +18,6 @@ FORMATS = {
 AUDIO_TYPES = ["mp3", "wav", "m4a", "aac", "ogg", "flac"]
 ARCHIVE_SEARCH = "https://archive.org/advancedsearch.php"
 ARCHIVE_METADATA = "https://archive.org/metadata/"
-FAL_ENDPOINT = "fal-ai/wan/v2.2-5b/text-to-video"
 NEGATIVE_PROMPT = "subtitles, captions, text, letters, logos, watermarks, still image, static frame, low quality, blurry, distorted anatomy"
 
 def get_secret(name: str, label: str, help_text: str) -> str:
