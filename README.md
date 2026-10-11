@@ -14,7 +14,7 @@ This repository is an integration/frontend and does not bundle the upstream cust
 - Generate a scene timeline and editable cinematic prompts.
 - Download storyboard JSON and scene-prompt text.
 - Optionally submit an API-format workflow to a running ComfyUI server.
-- Upload the original song to ComfyUI and optionally replace a selected workflow node input.
+- Configure a server-side song filename for workflows that load audio from the ComfyUI input folder.
 - Check a ComfyUI job and download output videos/images.
 - Create an MP4 from uploaded still images with the original song as audio.
 - Choose 16:9, 9:16, or 1:1 for the still-image MP4.
@@ -79,7 +79,7 @@ FFmpeg must also be installed. In resource-limited hosting, use the manual lyric
 3. Load and configure the workflow in ComfyUI.
 4. Export/download the workflow in API format (not the ordinary UI workflow JSON).
 5. In this app, enter the reachable ComfyUI base URL and upload the API JSON.
-6. If using audio conditioning, enter the exact node ID and input field for the audio loader. The app attempts to upload the song to ComfyUI and set that input.
+6. For audio-conditioned workflows, copy the uploaded song into the ComfyUI input folder using your normal ComfyUI file-transfer method, then enter its server-side filename, audio node ID, and exact input field. ComfyUI does not have a universal audio-upload endpoint that works for every custom node.
 7. If using a text prompt node, enter its node ID and input field (commonly text, but this depends on the node). The app inserts the first scene prompt.
 8. Queue the workflow, then use the status/download control to retrieve recorded outputs.
 
