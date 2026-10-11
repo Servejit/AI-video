@@ -236,6 +236,89 @@ def create_still_image_video(
     return output_path
 
 
+
+# Platform export presets. These are practical encoding targets, not a guarantee
+# that a platform will accept every file; platform limits can change.
+PLATFORM_PRESETS: dict[str, dict[str, Any]] = {
+    "Instagram Reels": {"size": (1080, 1920), "ratio": "9:16", "fps": 30},
+    "Instagram Stories": {"size": (1080, 1920), "ratio": "9:16", "fps": 30},
+    "Instagram Feed — Square": {"size": (1080, 1080), "ratio": "1:1", "fps": 30},
+    "Instagram Feed — Portrait": {"size": (1080, 1350), "ratio": "4:5", "fps": 30},
+    "Facebook Reels": {"size": (1080, 1920), "ratio": "9:16", "fps": 30},
+    "Facebook Feed — Landscape": {"size": (1920, 1080), "ratio": "16:9", "fps": 30},
+    "WhatsApp Status": {"size": (1080, 1920), "ratio": "9:16", "fps": 30},
+    "YouTube — Standard": {"size": (1920, 1080), "ratio": "16:9", "fps": 30},
+    "YouTube Shorts": {"size": (1080, 1920), "ratio": "9:16", "fps": 30},
+    "TikTok": {"size": (1080, 1920), "ratio": "9:16", "fps": 30},
+    "X / Twitter": {"size": (1920, 1080), "ratio": "16:9", "fps": 30},
+    "LinkedIn": {"size": (1920, 1080), "ratio": "16:9", "fps": 30},
+    "Pinterest Idea Pin": {"size": (1080, 1920), "ratio": "9:16", "fps": 30},
+    "Universal — 720p Landscape": {"size": (1280, 720), "ratio": "16:9", "fps": 30},
+}
+
+
+def export_platform_video(
+    input_path: Path,
+    song_path: Path,
+    output_path: Path,
+    preset: dict[str, Any],
+    fit_mode: str = "Crop to fill",
+    replace_audio: bool = True,
+) -> Path:
+    """Transcode a rendered video into an upload-friendly MP4 profile."""
+    if not ffmpeg_available():
+        raise RuntimeError("FFmpeg and FFprobe are required for platform exports.")
+    if not input_path.exists():
+        raise FileNotFoundError(f"Rendered video not found: {input_path}")
+    width, height = preset["size"]
+    fps = int(preset["fps"])
+    if fit_mode == "Fit with blurred background":
+        vf = (
+            f"split[fg][bg];"
+            f"[bg]scale={width}:{height}:force_original_aspect_ratio=increase,"
+            f"crop={width}:{height},boxblur=20:10[background];"
+            f"[fg]scale={width}:{height}:force_original_aspect_ratio=decrease[foreground];"
+            f"[background][foreground]overlay=(W-w)/2:(H-h)/2,"
+            f"fps={fps},setsar=1,format=yuv420p"
+        )
+    elif fit_mode == "Fit with black bars":
+        vf = (
+            f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,"
+            f"fps={fps},setsar=1,format=yuv420p"
+        )
+    else:
+        vf = (
+            f"scale={width}:{height}:force_original_aspect_ratio=increase,"
+            f"crop={width}:{height},fps={fps},setsar=1,format=yuv420p"
+        )
+
+    command = ["ffmpeg", "-y", "-i", str(input_path)]
+    if replace_audio:
+        command += ["-i", str(song_path)]
+        command += [
+            "-map", "0:v:0", "-map", "1:a:0",
+            "-c:a", "aac", "-b:a", "192k",
+            "-shortest",
+        ]
+    else:
+        command += [
+            "-map", "0:v:0", "-map", "0:a:0?",
+            "-c:a", "aac", "-b:a", "192k",
+        ]
+    command += [
+        "-vf", vf, "-r", str(fps), "-c:v", "libx264",
+        "-preset", "medium", "-crf", "20", "-profile:v", "high",
+        "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+        "-max_muxing_queue_size", "2048", str(output_path),
+    ]
+    ok, error = run_cmd(command, timeout=7200)
+    if not ok:
+        raise RuntimeError(error[-4000:])
+    if not output_path.exists() or output_path.stat().st_size == 0:
+        raise RuntimeError("FFmpeg did not create a valid output file.")
+    return output_path
+
 def queue_comfy_workflow(base_url: str, workflow: dict[str, Any]) -> str:
     response = requests.post(
         f"{base_url.rstrip('/')}/prompt",
@@ -534,6 +617,8 @@ if "project" in st.session_state:
                     download_comfy_output(job["url"], entry, target)
                     st.write(f"Output: {safe_name} ({entry['kind']})")
                     if target.suffix.lower() in {".mp4", ".webm", ".mov"}:
+                        st.session_state["latest_video_path"] = str(target)
+                        st.session_state["latest_video_name"] = safe_name
                         st.video(target.read_bytes())
                     st.download_button(
                         f"Download {safe_name}",
@@ -581,6 +666,8 @@ if "project" in st.session_state:
                     aspect, seconds_per_image
                 )
             video_bytes = output.read_bytes()
+            st.session_state["latest_video_path"] = str(output)
+            st.session_state["latest_video_name"] = output.name
             st.success("MP4 created.")
             st.video(video_bytes)
             st.download_button(
@@ -591,6 +678,80 @@ if "project" in st.session_state:
             )
         except Exception as exc:
             st.error(f"MP4 creation failed: {exc}")
+
+
+    st.header("7. Download for your platform")
+    st.write(
+        "Choose a destination platform to export a compatible MP4. The app "
+        "resizes/crops or fits the video, converts it to H.264 video + AAC audio, "
+        "and enables fast-start playback. The original uploaded song can replace "
+        "the video's audio track."
+    )
+    if not ffmpeg_available():
+        st.warning("FFmpeg/FFprobe is required for platform conversion.")
+    latest_path_value = st.session_state.get("latest_video_path")
+    if not latest_path_value or not Path(latest_path_value).exists():
+        st.info(
+            "First create an MP4 from still images or render a video with ComfyUI. "
+            "When a video output is available, it will appear here for platform export."
+        )
+    else:
+        latest_video_path = Path(latest_path_value)
+        platform_name = st.selectbox(
+            "Platform / format",
+            list(PLATFORM_PRESETS.keys()),
+            key="platform_export_target",
+        )
+        preset = PLATFORM_PRESETS[platform_name]
+        st.caption(
+            f"Export target: {preset['size'][0]} × {preset['size'][1]} px, "
+            f"{preset['ratio']}, {preset['fps']} fps, MP4 (H.264 + AAC)."
+        )
+        fit_mode = st.selectbox(
+            "How should the video fit?",
+            ["Crop to fill", "Fit with blurred background", "Fit with black bars"],
+            help=(
+                "Crop to fill may cut off the sides/top. Blurred background preserves "
+                "the full frame. Black bars preserve the full frame on black."
+            ),
+            key="platform_fit_mode",
+        )
+        replace_audio = st.checkbox(
+            "Use the original uploaded song as the final audio track",
+            value=True,
+            help="Recommended when the generated clip has silent, incorrect, or temporary audio.",
+            key="platform_replace_audio",
+        )
+        if st.button("Convert video for selected platform", type="primary"):
+            try:
+                if not ffmpeg_available():
+                    raise RuntimeError("FFmpeg is unavailable on this host.")
+                source_song = Path(st.session_state.get("song_path", ""))
+                if replace_audio and not source_song.exists():
+                    raise FileNotFoundError("The original uploaded song is not available in this session.")
+                safe_platform = re.sub(r"[^A-Za-z0-9]+", "_", platform_name).strip("_").lower()
+                export_path = APP_DIR / f"{safe_platform}_ready.mp4"
+                with st.spinner(f"Preparing {platform_name} MP4…"):
+                    export_platform_video(
+                        latest_video_path,
+                        source_song if source_song.exists() else latest_video_path,
+                        export_path,
+                        preset,
+                        fit_mode=fit_mode,
+                        replace_audio=replace_audio,
+                    )
+                export_bytes = export_path.read_bytes()
+                st.success(f"{platform_name} export is ready.")
+                st.video(export_bytes)
+                st.download_button(
+                    f"Download {platform_name} MP4",
+                    data=export_bytes,
+                    file_name=f"{safe_platform}_ready.mp4",
+                    mime="video/mp4",
+                    key=f"download_platform_{safe_platform}",
+                )
+            except Exception as exc:
+                st.error(f"Platform export failed: {exc}")
 
 st.divider()
 st.caption(
