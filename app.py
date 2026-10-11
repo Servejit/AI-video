@@ -726,15 +726,16 @@ if "project" in st.session_state:
             try:
                 if not ffmpeg_available():
                     raise RuntimeError("FFmpeg is unavailable on this host.")
-                source_song = Path(st.session_state.get("song_path", ""))
-                if replace_audio and not source_song.exists():
+                source_song_value = st.session_state.get("song_path")
+                source_song = Path(source_song_value) if source_song_value else None
+                if replace_audio and (source_song is None or not source_song.is_file()):
                     raise FileNotFoundError("The original uploaded song is not available in this session.")
                 safe_platform = re.sub(r"[^A-Za-z0-9]+", "_", platform_name).strip("_").lower()
                 export_path = APP_DIR / f"{safe_platform}_ready.mp4"
                 with st.spinner(f"Preparing {platform_name} MP4…"):
                     export_platform_video(
                         latest_video_path,
-                        source_song if source_song.exists() else latest_video_path,
+                        source_song if source_song is not None and source_song.is_file() else latest_video_path,
                         export_path,
                         preset,
                         fit_mode=fit_mode,
