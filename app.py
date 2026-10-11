@@ -549,9 +549,9 @@ st.caption("Uses FFmpeg, yt-dlp to search YouTube for clips marked Creative Comm
 st.divider()
 st.header("🎞️ Google Flow — Full Video Prompt + Final Music Mix")
 st.write(
-    "Upload the song, create one complete prompt tailored to its lyrics and mood, "
-    "generate the video in Google Flow, then upload that video here. The final MP4 "
-    "will use your MP3 as its only audio track."
+    "Upload the song, create a prompt for one 30-second Google Flow video with five "
+    "unique six-second scenes, then upload the generated video here. The final MP4 "
+    "will use your MP3 as its only audio track and match the MP3 duration."
 )
 
 flow_song = st.file_uploader(
@@ -602,7 +602,11 @@ def make_single_flow_prompt(song_duration: float, theme: str, lyrics_text: str,
     import math as _math
     import re as _re
 
-    total_scenes = max(5, min(24, _math.ceil(song_duration / max(3, target_scene_seconds))))
+    # Google Flow prompt is deliberately scoped to one 30-second clip.
+    # Five six-second scenes provide a clear, unique visual arc without repeats.
+    flow_clip_duration = 30.0
+    total_scenes = 5
+    scene_seconds = flow_clip_duration / total_scenes
     clean_lyrics = _re.sub(r"\s+", " ", (lyrics_text or "").strip())
     theme_text = (theme or "").strip() or "Let the song's lyrics and emotional progression define the theme"
     character_text = (character or "").strip() or (
@@ -630,8 +634,8 @@ def make_single_flow_prompt(song_duration: float, theme: str, lyrics_text: str,
             segment = " ".join(lyric_lines[lyric_start:lyric_end]).strip()
             if not segment:
                 segment = lyric_lines[min(lyric_start, len(lyric_lines) - 1)]
-            start_sec = song_duration * i / total_scenes
-            end_sec = song_duration * (i + 1) / total_scenes
+            start_sec = flow_clip_duration * i / total_scenes
+            end_sec = flow_clip_duration * (i + 1) / total_scenes
             start_stamp = f"{int(start_sec // 60):02d}:{start_sec % 60:05.2f}"
             end_stamp = f"{int(end_sec // 60):02d}:{end_sec % 60:05.2f}"
             beats.append(
@@ -646,8 +650,8 @@ def make_single_flow_prompt(song_duration: float, theme: str, lyrics_text: str,
         )
     else:
         beat_text = "\n".join(
-            f"{i+1}. TIMECODE {int((song_duration * i / total_scenes) // 60):02d}:{(song_duration * i / total_scenes) % 60:05.2f}–"
-            f"{int((song_duration * (i + 1) / total_scenes) // 60):02d}:{(song_duration * (i + 1) / total_scenes) % 60:05.2f}: "
+            f"{i+1}. TIMECODE {int((flow_clip_duration * i / total_scenes) // 60):02d}:{(flow_clip_duration * i / total_scenes) % 60:05.2f}–"
+            f"{int((flow_clip_duration * (i + 1) / total_scenes) // 60):02d}:{(flow_clip_duration * (i + 1) / total_scenes) % 60:05.2f}: "
             "Create a new story beat that advances the song's visual narrative, with a different action, "
             "location and composition from every other scene."
             for i in range(total_scenes)
@@ -660,7 +664,7 @@ def make_single_flow_prompt(song_duration: float, theme: str, lyrics_text: str,
 
     return f"""Create ONE COMPLETE, COHESIVE MUSIC VIDEO for the uploaded soundtrack. This is one master prompt for the entire video, not a prompt for a single shot.
 
-SONG DURATION: {song_duration:.3f} seconds. This duration is the master timeline and must not be exceeded or shortened. Plan a complete beginning-to-end story across the entire song. Use {total_scenes} distinct scenes with the exact approximate start/end timecodes listed below. Keep every scene within its assigned time range; transitions must not cause gaps, overlaps, frozen frames or missing sections. Let action and cut points respond to musical phrases within these time ranges, but preserve the full timeline from 00:00.00 to {int(song_duration // 60):02d}:{song_duration % 60:05.2f}.
+GOOGLE FLOW CLIP DURATION: EXACTLY 30 seconds (00:00.00–00:30.00). Generate one 30-second silent video clip, regardless of the full MP3 length. The uploaded MP3 is {song_duration:.3f} seconds long and will be fitted during final editing. Use exactly 5 distinct scenes, approximately 6 seconds each, with the timecodes listed below. Cover the entire 30-second clip continuously from 00:00.00 to 00:30.00. Do not stretch one scene to fill time, and do not repeat footage.
 
 THEME / CREATIVE DIRECTION: {theme_text}
 VISUAL STYLE: {visual_style}
@@ -683,7 +687,7 @@ STRICT AUDIO AND TEXT:
 Silent video only. Absolutely no audible voice, dialogue, singing, soundtrack, music or sound effects. No subtitles, lyrics on screen, captions, titles, logos or watermarks. Do not generate text to represent the lyrics.
 
 OUTPUT:
-Generate the entire music video as one continuous, coherent video if the tool supports it. If Google Flow has a per-generation duration limit, create the planned scenes in this exact order without repeating any scene, then assemble them in order. The final video must cover the full song duration. The original uploaded MP3 will be the only soundtrack in the final edit."""
+Generate ONE 30-second video clip only. Include all five scenes in the listed order within the 00:00.00–00:30.00 timeline. Do not generate a longer video, and do not repeat or recycle any scene. The final editor will use the original uploaded MP3 as the only soundtrack and will align the finished export to the MP3 duration."""
 
 flow_generate = st.button(
     "Generate my single Google Flow prompt",
@@ -733,9 +737,9 @@ if st.session_state.get("generated_flow_master_prompt"):
         key="download_flow_master_prompt"
     )
     st.caption(
-        "Google Flow controls its own generation limits. A single prompt cannot guarantee "
-        "that Flow will render a feature-length video in one generation; the prompt includes "
-        "an ordered no-repeat scene plan for tools that require multiple clips."
+        "The prompt is intentionally for one 30-second clip: five unique scenes of about "
+        "six seconds each. Google Flow controls its actual generation limits, so verify "
+        "the generated clip duration before final editing."
     )
 
 st.divider()
