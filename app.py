@@ -22,11 +22,22 @@ FAL_ENDPOINT = "fal-ai/wan/v2.2-5b/text-to-video"
 NEGATIVE_PROMPT = "subtitles, captions, text, letters, logos, watermarks, still image, static frame, low quality, blurry, distorted anatomy"
 
 def get_secret(name: str, label: str, help_text: str) -> str:
+    # A typed override must take precedence over Streamlit secrets, so users can
+    # replace a stale/rejected secret without editing deployment settings first.
     try:
-        value = st.secrets.get(name, "")
+        saved_value = str(st.secrets.get(name, "") or "").strip()
     except Exception:
-        value = ""
-    return str(value or st.text_input(label, type="password", help=help_text)).strip()
+        saved_value = ""
+    if saved_value:
+        st.caption(f"{name} is configured in Streamlit Secrets. You can enter a replacement below if that saved key is rejected.")
+        override = st.text_input(
+            f"{label} — optional replacement",
+            type="password",
+            help=help_text,
+            key=f"{name}_override",
+        ).strip()
+        return override or saved_value
+    return st.text_input(label, type="password", help=help_text, key=f"{name}_input").strip()
 
 def run_command(command: list[str]) -> None:
     result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -167,8 +178,24 @@ def generate_ai_clip(prompt: str, api_key: str, aspect_ratio: str, target: Path,
                "resolution": "720p", "enable_safety_checker": True, "enable_prompt_expansion": True}
     response = requests.post(base, headers=headers, json=payload, timeout=60)
     if response.status_code in (401, 403):
-        raise RuntimeError("fal.ai rejected the key. Check FAL_KEY and account access.")
-    response.raise_for_status()
+        try:
+            detail = response.json()
+        except ValueError:
+            detail = response.text[:800]
+        if response.status_code == 401:
+            raise RuntimeError(
+                "fal.ai returned HTTP 401 (authentication failed). Check that the complete, current key was copied from "
+                "https://fal.ai/dashboard/keys and that Streamlit is not using an older FAL_KEY secret. "
+                f"Provider detail: {str(detail)[:800]}"
+            )
+        raise RuntimeError(
+            "fal.ai returned HTTP 403 (access denied). The key may be valid, but the account/key may lack access to this model "
+            "or the account may have a restriction. Check fal.ai account/model access. "
+            f"Provider detail: {str(detail)[:800]}"
+        )
+    if not response.ok:
+        raise RuntimeError(f"fal.ai request failed with HTTP {response.status_code}: {response.text[:1000]}")
+
     data = response.json()
     request_id = data.get("request_id")
     status_url = data.get("status_url") or (f"{base}/requests/{request_id}/status" if request_id else "")
