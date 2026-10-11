@@ -1,53 +1,50 @@
-# AI Music Video — MP3-only automatic generator
+# Free Music Video Studio — MP3 to MP4
 
-Upload one MP3, press **Generate complete AI music video**, and download the finished video plus platform-ready MP4 exports.
+Upload an MP3, enter a topic or story, choose an aspect ratio, and download an MP4 with the original soundtrack.
 
-## Automatic workflow
-1. Reads the MP3 duration.
-2. Attempts vocal transcription using Replicate's Whisper model.
-3. Creates cinematic scene prompts.
-4. Generates moving AI clips using Replicate's Minimax Video-01 model (approximately 6 seconds per clip).
-5. Joins the clips and adds the original MP3 soundtrack.
-6. Creates exports for Instagram Reels/Stories/feed, Facebook Reels/feed, WhatsApp Status, YouTube/Shorts, TikTok, X, LinkedIn, Pinterest Idea Pins, and universal 720p landscape.
-7. Provides a master MP4 and a ZIP containing all platform formats.
+## Features
 
-## Required one-time setup
-1. Create a Replicate account and API token at https://replicate.com/account/api-tokens.
-2. Deploy this repository from Streamlit Community Cloud.
-3. Open the app settings, then Secrets, and add the following with your actual token:
+- MP3 upload and MP4 download.
+- Story/topic-based scene planning.
+- YouTube landscape (16:9), vertical (9:16), and square (1:1) outputs.
+- Searches Internet Archive for footage whose metadata explicitly identifies a recognized Creative Commons or public-domain license.
+- If no suitable licensed footage is found, generates animated visual scenes locally using FFmpeg.
+- Preserves the original song in the final MP4 and matches video duration to audio duration.
+- No captions, subtitles, lyrics, or text overlays.
+- No Google Colab, paid APIs, AI service keys, or subscription required.
 
-   REPLICATE_API_TOKEN = "r8_your_real_token_here"
+## Important limitation
 
-4. Save secrets and reboot/redeploy the app. Never commit the token to GitHub.
-5. Upload an MP3 and press Generate.
+This version is a free stock-footage and animated-scene video maker, **not a generative AI text-to-video model**. The story guides scene searches and scene sequencing, but free Streamlit hosting cannot guarantee access to a GPU for true AI video generation. The animated fallback is generated locally with FFmpeg. It may be necessary to use shorter MP3 files on the free Streamlit tier because server CPU, memory, and execution time are limited.
 
-## Costs and limitations
-- **AI video generation is a paid service.** Review the current model pricing at https://replicate.com/minimax/video-01/api before generating.
-- The model creates clips of approximately six seconds. A three-minute song can require around 30 video generations, and the provider charges for generations. Long songs can be expensive.
-- Transcription uses the Replicate Whisper model. If transcription fails, the app falls back to a generic cinematic storyline, so scenes may not match lyrics as closely.
-- Streamlit Community Cloud may time out on long generation jobs. A server with longer execution limits is recommended for long songs.
-- Visual continuity and generated quality vary. Portrait exports crop landscape footage to fill the target frame; review files before posting.
-- Hosted storage may be temporary. Download your files after generation.
+## Deploy on Streamlit Community Cloud
 
-## Deployment
-Repository: Servejit/AI-video; branch: main; entry point: app.py. The requirements file installs Python packages and packages.txt installs FFmpeg/FFprobe.
+1. Open https://share.streamlit.io/
+2. Select this repository: `Servejit/AI-video`.
+3. Set the app file to `app.py`.
+4. Deploy. No secrets or API keys are needed.
+5. Upload an MP3, enter a topic, choose the video format and scene count, then click **Generate MP4**.
 
-## Local run
-Install Python 3.10 or 3.11 and FFmpeg/FFprobe, then:
+The repository includes `packages.txt` with FFmpeg for Streamlit's Linux environment.
+
+## Footage licensing
+
+The app tries to use only items whose Internet Archive metadata includes a recognized public-domain or Creative Commons license. Metadata can be incomplete or inaccurate; open the source/rights page shown in the credits and verify the specific license and any attribution requirements before publishing or monetizing a video. When a matching licensed video cannot be found, the app uses locally generated animated visuals instead.
+
+## Run locally
+
+Install Python 3.10+ and FFmpeg/FFprobe, then:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-export REPLICATE_API_TOKEN="r8_your_real_token_here"
 streamlit run app.py
 ```
 
-Windows PowerShell activation: `.venv\\Scripts\\Activate.ps1`. Set the token with `$env:REPLICATE_API_TOKEN="r8_your_real_token_here"`.
+On Windows PowerShell, activate with `.venv\\Scripts\\Activate.ps1`.
 
-## API references
-- Minimax Video-01: https://replicate.com/minimax/video-01/api
-- Replicate API tokens: https://replicate.com/account/api-tokens
-- Replicate HTTP API: https://replicate.com/docs/reference/http
+## Repository
 
-Follow the terms of Replicate and the models you use. This app does not bundle model weights.
+- App: https://github.com/Servejit/AI-video/blob/main/app.py
+- Streamlit app: https://music-ai-video.streamlit.app
