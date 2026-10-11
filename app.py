@@ -1,5 +1,5 @@
 """Automatic hybrid AI + stock-footage music video maker.
-Upload a song and topic/story; fetch Pexels footage and generate clips with fal.ai.
+Upload a song and topic/story; fetch Pixabay footage and generate clips with fal.ai.
 No captions, lyrics, subtitles, or text overlays are added.
 """
 from __future__ import annotations
@@ -16,7 +16,7 @@ FORMATS = {
     "Square video (1:1)": ((900, 900), "1:1", "square"),
 }
 AUDIO_TYPES = ["mp3", "wav", "m4a", "aac", "ogg", "flac"]
-PEXELS_SEARCH = "https://api.pexels.com/v1/videos/search"
+PIXABAY_VIDEO_SEARCH = "https://pixabay.com/api/videos/"
 FAL_ENDPOINT = "fal-ai/wan/v2.2-5b/text-to-video"
 NEGATIVE_PROMPT = "subtitles, captions, text, letters, logos, watermarks, still image, static frame, low quality, blurry, distorted anatomy"
 
@@ -85,45 +85,48 @@ def download_https(url: str, target: Path, max_bytes: int = 250_000_000) -> None
     if not target.exists() or target.stat().st_size < 1024:
         raise RuntimeError("Media download was empty or incomplete.")
 
-def search_pexels(query: str, api_key: str, orientation: str) -> list[dict]:
-    response = requests.get(PEXELS_SEARCH, headers={"Authorization": api_key},
-        params={"query": query[:180], "orientation": orientation, "per_page": 12, "size": "medium"}, timeout=30)
-    if response.status_code == 401:
-        raise RuntimeError("Pexels rejected the API key. Check PEXELS_API_KEY.")
+def search_pixabay(query: str, api_key: str) -> list[dict]:
+    response = requests.get(PIXABAY_VIDEO_SEARCH,
+        params={"key": api_key, "q": query[:100], "per_page": 12, "safesearch": "true",
+                "order": "popular"}, timeout=30)
+    if response.status_code in (401, 403):
+        raise RuntimeError("Pixabay rejected the API key. Check PIXABAY_API_KEY.")
     response.raise_for_status()
-    return response.json().get("videos", [])
+    return response.json().get("hits", [])
 
-def choose_pexels_file(video: dict, target_size: tuple[int, int]) -> str | None:
-    files = video.get("video_files", [])
-    valid = [f for f in files if f.get("link") and f.get("file_type", "").lower() in ("video/mp4", "video/webm")]
-    if not valid:
-        valid = [f for f in files if f.get("link")]
-    if not valid:
+def choose_pixabay_file(video: dict, target_size: tuple[int, int]) -> str | None:
+    files = video.get("videos", {})
+    candidates = []
+    for quality in ("large", "medium", "small", "tiny"):
+        item = files.get(quality, {})
+        if item.get("url"):
+            candidates.append(item)
+    if not candidates:
         return None
     tw, th = target_size
-    def score(f: dict) -> tuple:
-        w, h = int(f.get("width") or 0), int(f.get("height") or 0)
+    def score(item: dict) -> tuple:
+        w, h = int(item.get("width") or 0), int(item.get("height") or 0)
         return (abs(w / h - tw / th) if h else 10, 0 if w >= min(tw, th) else 1, -(w * h))
-    return sorted(valid, key=score)[0].get("link")
+    return sorted(candidates, key=score)[0].get("url")
 
 def get_stock_clip(scene: str, api_key: str, orientation: str, size: tuple[int, int],
                    target: Path, used_ids: set[int]) -> tuple[str, str]:
-    queries = list(dict.fromkeys([scene.split(".")[0][:100], " ".join(scene.split()[:6])]))
+    queries = list(dict.fromkeys([scene.split(".")[0][:90], " ".join(scene.split()[:6])]))
     for query in queries:
-        videos = search_pexels(query, api_key, orientation)
+        videos = search_pixabay(query, api_key)
         candidates = [v for v in videos if int(v.get("id") or 0) not in used_ids] or videos
         for video in candidates:
-            link = choose_pexels_file(video, size)
+            link = choose_pixabay_file(video, size)
             if not link:
                 continue
             try:
                 download_https(link, target)
                 used_ids.add(int(video.get("id") or 0))
-                photographer = video.get("user", {}).get("name", "Pexels contributor")
-                return f"Stock footage from Pexels — {photographer}", video.get("url", "https://www.pexels.com")
+                creator = video.get("user", "Pixabay contributor")
+                return f"Stock footage from Pixabay — {creator}", video.get("pageURL", "https://pixabay.com/videos/")
             except (requests.RequestException, RuntimeError):
                 continue
-    raise RuntimeError(f"No downloadable Pexels clip found for scene: {queries[-1]}")
+    raise RuntimeError(f"No downloadable Pixabay clip found for scene: {queries[-1]}")
 
 def generate_ai_clip(prompt: str, api_key: str, aspect_ratio: str, target: Path, status_line) -> None:
     base = f"https://queue.fal.run/{FAL_ENDPOINT}"
@@ -191,16 +194,16 @@ def assemble_video(clips: list[Path], audio: Path, output: Path, work: Path,
 
 st.title("🎬 AI Music Video Studio")
 st.write("Upload a song and enter a topic/story. The app automatically combines original AI-generated clips with real stock footage.")
-st.info("No captions, lyrics, subtitles, or text overlays. AI generation through fal.ai may incur charges; stock footage comes from Pexels.")
+st.info("No captions, lyrics, subtitles, or text overlays. AI generation through fal.ai may incur charges; stock footage comes from Pixabay.")
 
 with st.expander("API access setup", expanded=True):
     st.markdown(
-        "Configure Streamlit secrets named FAL_KEY and PEXELS_API_KEY, or enter keys below. "
+        "Configure Streamlit secrets named FAL_KEY and PIXABAY_API_KEY, or enter keys below. "
         "Keep keys private. [Get a fal.ai key](https://fal.ai/dashboard/keys) · "
-        "[Get a Pexels API key](https://www.pexels.com/api/)"
+        "[Get a Pixabay API key](https://pixabay.com/api/docs/)"
     )
     fal_key = get_secret("FAL_KEY", "fal.ai API key (required when AI clips are selected)", "Used privately by the server to request AI-generated video.")
-    pexels_key = get_secret("PEXELS_API_KEY", "Pexels API key (required when stock clips are selected)", "Used privately to search and download stock video.")
+    pexels_key = get_secret("PEXELS_API_KEY", "Pixabay API key (required when stock clips are selected)", "Used privately to search and download stock video.")
 
 topic = st.text_input("1. Video topic", placeholder="e.g. Never give up, Punjabi motivational song")
 story = st.text_area("2. Story or scene guidance (optional)",
@@ -219,7 +222,7 @@ if st.button("Generate music video", type="primary", disabled=not (topic.strip()
     if ai_count and not fal_key:
         st.error("Enter a fal.ai API key or configure FAL_KEY in Streamlit secrets.")
     elif stock_count and not pexels_key:
-        st.error("Enter a Pexels API key or configure PEXELS_API_KEY in Streamlit secrets.")
+        st.error("Enter a Pixabay API key or configure PEXELS_API_KEY in Streamlit secrets.")
     elif not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
         st.error("FFmpeg and FFprobe are required. Ensure ffmpeg is listed in packages.txt and the app has redeployed.")
     else:
@@ -272,10 +275,10 @@ if st.button("Generate music video", type="primary", disabled=not (topic.strip()
                     if item["source"]:
                         st.markdown(f"[View source clip]({item['source']})")
                     st.caption(item["prompt"])
-                st.markdown("Stock footage provided by [Pexels](https://www.pexels.com/).")
+                st.markdown("Stock footage provided by [Pexels](https://pixabay.com/).")
         except Exception as exc:
             st.error("The video could not be created.")
             st.code(str(exc))
             st.caption("Check API keys, provider credits/limits, internet access, and FFmpeg deployment logs.")
 
-st.caption("Use AI provider services according to their terms. Pexels footage is subject to the Pexels license and API guidelines.")
+st.caption("Use AI provider services according to their terms. Pixabay footage is subject to the Pexels license and API guidelines.")
