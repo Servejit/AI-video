@@ -313,8 +313,9 @@ if st.button("Generate MP4", type="primary", disabled=not (topic.strip() and son
                 audio.write_bytes(song.getvalue())
                 duration = probe_duration(audio)
                 scenes = make_scenes(topic.strip(), story, scene_count)
-                # Split total song duration evenly, ensuring no clip has a zero duration.
-                scene_seconds = duration / scene_count
+                # Make short music-video shots, then cycle the scene montage to cover the full song.
+                # This avoids stretching one 3-second AI clip across a long section of audio.
+                scene_seconds = min(4.0, duration / scene_count)
                 clips: list[Path] = []
                 preferred_stock_count = round(scene_count * stock_percent / 100)
                 stock_slots = set()
@@ -380,6 +381,9 @@ if st.button("Generate MP4", type="primary", disabled=not (topic.strip() and son
                     progress.progress(0.06 + 0.78 * (index + 1) / scene_count,
                                       text=f"Prepared scene {index + 1} of {scene_count}")
                     status.empty()
+                if clips and scene_seconds > 0:
+                    repeats = max(1, math.ceil(duration / (scene_seconds * len(clips))))
+                    clips = clips * repeats
                 output = work / "music_video.mp4"
                 build_mp4(clips, audio, output, work, size, duration, progress)
                 video_bytes = output.read_bytes()
