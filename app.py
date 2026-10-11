@@ -603,7 +603,7 @@ def make_single_flow_prompt(song_duration: float, theme: str, lyrics_text: str,
     import re as _re
 
     total_scenes = max(5, min(24, _math.ceil(song_duration / max(3, target_scene_seconds))))
-    clean_lyrics = _re.sub(r"\\s+", " ", (lyrics_text or "").strip())
+    clean_lyrics = _re.sub(r"\s+", " ", (lyrics_text or "").strip())
     theme_text = (theme or "").strip() or "Let the song's lyrics and emotional progression define the theme"
     character_text = (character or "").strip() or (
         "Use a visually consistent lead character wherever the story benefits from continuity; "
@@ -615,8 +615,8 @@ def make_single_flow_prompt(song_duration: float, theme: str, lyrics_text: str,
     # energy and the user's theme rather than pretending the lyrics were analyzed.
     if clean_lyrics:
         lyric_lines = [
-            _re.sub(r"\\s+", " ", line).strip(" -•")
-            for line in _re.split(r"\\n+|(?<=[.!?।])\\s+", lyrics_text.strip())
+            _re.sub(r"\s+", " ", line).strip(" -•")
+            for line in _re.split(r"\n+|(?<=[.!?।])\s+", lyrics_text.strip())
             if line.strip()
         ]
         if not lyric_lines:
@@ -631,13 +631,13 @@ def make_single_flow_prompt(song_duration: float, theme: str, lyrics_text: str,
             if not segment:
                 segment = lyric_lines[min(start, len(lyric_lines) - 1)]
             beats.append(f"{i+1}. VISUALIZE THIS LYRIC BEAT: “{segment}”. Show a concrete, literal action that expresses its meaning; advance the story.")
-        beat_text = "\\n".join(beats)
+        beat_text = "\n".join(beats)
         lyric_instruction = (
             "Treat the supplied lyrics below as the story source and preserve their order. "
             "Interpret each beat visually, not with on-screen words. Do not invent a different song or change the lyric order."
         )
     else:
-        beat_text = "\\n".join(
+        beat_text = "\n".join(
             f"{i+1}. Create a new story beat that advances the song's visual narrative, with a different action, "
             "location and composition from every other scene."
             for i in range(total_scenes)
