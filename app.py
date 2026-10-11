@@ -623,14 +623,22 @@ def make_single_flow_prompt(song_duration: float, theme: str, lyrics_text: str,
             lyric_lines = [clean_lyrics]
         beats = []
         for i in range(total_scenes):
-            start = round(i * len(lyric_lines) / total_scenes)
-            end = round((i + 1) * len(lyric_lines) / total_scenes)
-            if end <= start:
-                end = min(len(lyric_lines), start + 1)
-            segment = " ".join(lyric_lines[start:end]).strip()
+            lyric_start = round(i * len(lyric_lines) / total_scenes)
+            lyric_end = round((i + 1) * len(lyric_lines) / total_scenes)
+            if lyric_end <= lyric_start:
+                lyric_end = min(len(lyric_lines), lyric_start + 1)
+            segment = " ".join(lyric_lines[lyric_start:lyric_end]).strip()
             if not segment:
-                segment = lyric_lines[min(start, len(lyric_lines) - 1)]
-            beats.append(f"{i+1}. VISUALIZE THIS LYRIC BEAT: “{segment}”. Show a concrete, literal action that expresses its meaning; advance the story.")
+                segment = lyric_lines[min(lyric_start, len(lyric_lines) - 1)]
+            start_sec = song_duration * i / total_scenes
+            end_sec = song_duration * (i + 1) / total_scenes
+            start_stamp = f"{int(start_sec // 60):02d}:{start_sec % 60:05.2f}"
+            end_stamp = f"{int(end_sec // 60):02d}:{end_sec % 60:05.2f}"
+            beats.append(
+                f"{i+1}. TIMECODE {start_stamp}–{end_stamp}: VISUALIZE THIS LYRIC BEAT: "
+                f"“{segment}”. Show a concrete, literal action that expresses its meaning; "
+                "advance the story and complete the transition by the end time."
+            )
         beat_text = "\n".join(beats)
         lyric_instruction = (
             "Treat the supplied lyrics below as the story source and preserve their order. "
@@ -638,7 +646,9 @@ def make_single_flow_prompt(song_duration: float, theme: str, lyrics_text: str,
         )
     else:
         beat_text = "\n".join(
-            f"{i+1}. Create a new story beat that advances the song's visual narrative, with a different action, "
+            f"{i+1}. TIMECODE {int((song_duration * i / total_scenes) // 60):02d}:{(song_duration * i / total_scenes) % 60:05.2f}–"
+            f"{int((song_duration * (i + 1) / total_scenes) // 60):02d}:{(song_duration * (i + 1) / total_scenes) % 60:05.2f}: "
+            "Create a new story beat that advances the song's visual narrative, with a different action, "
             "location and composition from every other scene."
             for i in range(total_scenes)
         )
@@ -650,7 +660,7 @@ def make_single_flow_prompt(song_duration: float, theme: str, lyrics_text: str,
 
     return f"""Create ONE COMPLETE, COHESIVE MUSIC VIDEO for the uploaded soundtrack. This is one master prompt for the entire video, not a prompt for a single shot.
 
-SONG DURATION: approximately {song_duration:.1f} seconds. Plan a complete beginning-to-end story for the full song. Use about {total_scenes} distinct scenes, targeting roughly {target_scene_seconds} seconds per scene while allowing timing to follow musical phrases, verses, refrains, pauses and the ending.
+SONG DURATION: {song_duration:.3f} seconds. This duration is the master timeline and must not be exceeded or shortened. Plan a complete beginning-to-end story across the entire song. Use {total_scenes} distinct scenes with the exact approximate start/end timecodes listed below. Keep every scene within its assigned time range; transitions must not cause gaps, overlaps, frozen frames or missing sections. Let action and cut points respond to musical phrases within these time ranges, but preserve the full timeline from 00:00.00 to {int(song_duration // 60):02d}:{song_duration % 60:05.2f}.
 
 THEME / CREATIVE DIRECTION: {theme_text}
 VISUAL STYLE: {visual_style}
@@ -769,19 +779,20 @@ if st.button(
                 input_video_path.write_bytes(final_video.getvalue())
                 song_duration = probe_duration(song_path)
                 final_progress.progress(0.25, text="Replacing all original video audio…")
-                # -stream_loop repeats a short generated video to cover the song.
-                # Explicitly map video from input 0 and audio only from input 1.
-                # No audio stream from the Google Flow upload can reach the output.
+                # The MP3 defines the master timeline. Loop only the video if it is
+                # shorter, cut the video at the exact MP3 duration, and never map
+                # any audio from the Google Flow file. Do not use -shortest here:
+                # it could stop early if the video stream has a shorter packet timeline.
                 run_command([
                     "ffmpeg", "-y", "-stream_loop", "-1", "-i", str(input_video_path),
                     "-i", str(song_path),
                     "-map", "0:v:0", "-map", "1:a:0",
-                    "-t", f"{song_duration:.3f}",
+                    "-t", f"{song_duration:.6f}",
                     "-vf", "setsar=1,format=yuv420p",
                     "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
                     "-c:a", "aac", "-b:a", "192k",
                     "-af", "aresample=async=1",
-                    "-shortest", "-movflags", "+faststart",
+                    "-movflags", "+faststart",
                     str(final_output_path)
                 ])
                 final_progress.progress(0.95, text="Checking the finished MP4…")
