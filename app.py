@@ -302,7 +302,8 @@ format_name = st.selectbox("5. Video format", list(FORMATS.keys()))
 scene_count = st.slider("6. Number of scenes / AI generation attempts", 2, 8, 3)
 stock_percent = st.slider("7. Stock footage preference (%)", 0, 100, 0, 10,
     help="Set to 0 to prioritize AI-generated actor scenes. Higher values try free licensed footage, but footage may not match your exact story.")
-require_humans = st.checkbox("Prioritize real-looking male/female actors; stop rather than substitute abstract animation", value=True, help="Recommended for a movie-style result. If free AI generation and suitable footage both fail, the app will explain the failure instead of making an abstract video.")\nst.caption("Movie mode asks for visible fictional adult male and female actors performing specific actions. Free AI generation is not guaranteed; for reliable character continuity, upload your own generated actor clips if needed.")
+require_humans = st.checkbox("Prioritize real-looking male/female actors; stop rather than substitute abstract animation", value=True, help="Recommended for a movie-style result. If free AI generation and suitable footage both fail, the app will explain the failure instead of making an abstract video.")
+st.caption("Movie mode asks for visible fictional adult male and female actors performing specific actions. Free AI generation is not guaranteed; for reliable character continuity, upload your own generated actor clips if needed.")
 
 if st.button("Generate MP4", type="primary", disabled=not (topic.strip() and song)):
     if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
