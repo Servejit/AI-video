@@ -34,6 +34,25 @@ st.title("🎬 Cinematic Video Studio")
 st.caption("Create an original illustrated music video with cinematic camera movement, atmosphere, captions and your own soundtrack.")
 st.info("This version creates stylized cinematic illustrations and animates them with Python + FFmpeg. It does not generate photorealistic AI footage and does not use Replicate or paid APIs.")
 
+@st.cache_resource(show_spinner=False)
+def load_whisper_model(model_size: str = "tiny"):
+    """Load and cache a local Whisper speech-to-text model."""
+    from faster_whisper import WhisperModel
+    return WhisperModel(model_size, device="cpu", compute_type="int8")
+
+def transcribe_audio(audio_path: Path, model_size: str = "tiny") -> str:
+    """Transcribe spoken or sung words from an uploaded audio file."""
+    model = load_whisper_model(model_size)
+    segments, info = model.transcribe(
+        str(audio_path),
+        task="transcribe",
+        vad_filter=True,
+        beam_size=3,
+        condition_on_previous_text=False,
+    )
+    parts = [segment.text.strip() for segment in segments if segment.text.strip()]
+    return "\\n".join(parts)
+
 def command(args: list[str], timeout: int = 1800) -> tuple[bool, str]:
     try:
         p = subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False)
@@ -173,9 +192,51 @@ with st.sidebar:
     caption_mode=st.radio("On-screen text",["Use my lyrics / captions","Use motivational captions"],index=0)
 
 audio=st.file_uploader("1. Upload your song / audio",type=["mp3","wav","m4a","aac","ogg","flac"])
-captions_text=st.text_area("2. Paste lyrics or captions (one line or sentence per scene)",height=140,
- placeholder="Every road begins with a dream.\nI will rise again.\nNothing can stop me.")
-st.caption("For best results, paste short caption lines. Automatic speech-to-text is not included.")
+
+if "transcribed_lyrics" not in st.session_state:
+    st.session_state["transcribed_lyrics"] = ""
+if "transcription_audio_name" not in st.session_state:
+    st.session_state["transcription_audio_name"] = ""
+
+transcribe_col, model_col = st.columns([2, 1])
+with model_col:
+    whisper_size = st.selectbox("Transcription model", ["tiny", "base", "small"], index=0,
+                                help="Tiny is fastest. Larger models may recognize words more accurately but use more memory and time.")
+with transcribe_col:
+    transcribe_clicked = st.button("🎙️ Get lyrics automatically from audio", use_container_width=True,
+                                   disabled=audio is None)
+
+if transcribe_clicked and audio is not None:
+    if audio.size > 100*1024*1024:
+        st.error("Audio is larger than the 100 MB upload limit.")
+    else:
+        transcribe_path = ROOT / ("transcribe_" + re.sub(r"[^A-Za-z0-9._-]", "_", audio.name))
+        transcribe_path.write_bytes(audio.getvalue())
+        try:
+            with st.spinner("Listening to your audio and recognizing words. The first run downloads the speech model and may take a while…"):
+                detected_text = transcribe_audio(transcribe_path, whisper_size)
+            st.session_state["transcribed_lyrics"] = detected_text
+            st.session_state["transcription_audio_name"] = audio.name
+            if detected_text:
+                st.success("Lyrics / words detected. Review and edit them below before creating the video.")
+            else:
+                st.warning("No clear words were detected. Instrumental music, noisy audio, or singing may be difficult to transcribe. You can paste lyrics manually.")
+        except Exception as exc:
+            st.error(f"Automatic transcription failed: {exc}. You can still paste lyrics manually.")
+        finally:
+            try:
+                transcribe_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+if audio is not None and st.session_state["transcription_audio_name"] and st.session_state["transcription_audio_name"] != audio.name:
+    st.session_state["transcribed_lyrics"] = ""
+    st.session_state["transcription_audio_name"] = ""
+
+captions_text=st.text_area("2. Lyrics / captions (editable; one line or sentence per scene)",
+    height=180, key="transcribed_lyrics",
+    placeholder="Tap 'Get lyrics automatically from audio' or paste lyrics here.")
+st.caption("Automatic recognition works best for clear vocals or spoken words. Sung lyrics may be imperfect; instrumental audio has no lyrics to extract. Please review the text before rendering.")
 go=st.button("✨ Create Cinematic Video",type="primary",use_container_width=True)
 if go:
     if audio is None:
