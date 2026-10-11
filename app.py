@@ -1,327 +1,323 @@
-"""Open-source AI + stock-footage music video maker.
-Upload a song and topic/story; generate clips with Wan 2.1 running in the user's Google Colab GPU session.
-Stock footage is searched from Internet Archive. No paid video API, captions, lyrics, subtitles, or text overlays.
+"""Free MP3-to-MP4 music video maker.
+Uses explicitly licensed Internet Archive footage where available and animated
+visualizer scenes as a fallback. No paid APIs, no Colab, no captions/lyrics/text overlays.
 """
 from __future__ import annotations
-import json, math, re, shutil, subprocess, tempfile, time
+import math, re, shutil, subprocess, tempfile
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
+
 import requests
 import streamlit as st
 
-st.set_page_config(page_title="AI Music Video Studio", page_icon="🎬", layout="centered")
+st.set_page_config(page_title="Free AI Music Video Studio", page_icon="🎬", layout="centered")
+
 FORMATS = {
-    "YouTube widescreen (16:9)": ((1280, 720), "16:9", "landscape"),
-    "Vertical video (9:16)": ((720, 1280), "9:16", "portrait"),
-    "Square video (1:1)": ((900, 900), "1:1", "square"),
+    "YouTube widescreen (16:9)": (1280, 720),
+    "Vertical video (9:16)": (720, 1280),
+    "Square video (1:1)": (900, 900),
 }
-AUDIO_TYPES = ["mp3", "wav", "m4a", "aac", "ogg", "flac"]
 ARCHIVE_SEARCH = "https://archive.org/advancedsearch.php"
 ARCHIVE_METADATA = "https://archive.org/metadata/"
-NEGATIVE_PROMPT = "subtitles, captions, text, letters, logos, watermarks, still image, static frame, low quality, blurry, distorted anatomy"
-
-def get_secret(name: str, label: str, help_text: str) -> str:
-    # A typed override must take precedence over Streamlit secrets, so users can
-    # replace a stale/rejected secret without editing deployment settings first.
-    try:
-        saved_value = str(st.secrets.get(name, "") or "").strip()
-    except Exception:
-        saved_value = ""
-    if saved_value:
-        st.caption(f"{name} is configured in Streamlit Secrets. You can enter a replacement below if that saved key is rejected.")
-        override = st.text_input(
-            f"{label} — optional replacement",
-            type="password",
-            help=help_text,
-            key=f"{name}_override",
-        ).strip()
-        return override or saved_value
-    return st.text_input(label, type="password", help=help_text, key=f"{name}_input").strip()
+USER_AGENT = "FreeMusicVideoStudio/1.0 (open-source Streamlit app)"
 
 def run_command(command: list[str]) -> None:
     result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if result.returncode:
-        raise RuntimeError((result.stderr or "FFmpeg command failed.")[-4000:])
+        raise RuntimeError((result.stderr or "FFmpeg command failed.")[-3000:])
 
 def probe_duration(path: Path) -> float:
-    result = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    result = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
     if result.returncode:
-        raise RuntimeError("Could not read media duration.")
+        raise RuntimeError("Could not read the MP3 duration. Please upload a valid MP3 file.")
     try:
         return max(0.1, float(result.stdout.strip()))
     except ValueError as exc:
-        raise RuntimeError("FFprobe returned an invalid duration.") from exc
+        raise RuntimeError("The audio duration could not be read.") from exc
 
 def make_scenes(topic: str, story: str, count: int) -> list[str]:
-    chunks = re.split(r"(?<=[.!?।])\s+|\n+", (story or "").strip())
-    chunks = [re.sub(r"\s+", " ", x).strip(" -•\t") for x in chunks if x.strip()]
-    if not chunks:
-        chunks = [
-            f"Opening establishing shot about {topic}",
-            f"A person taking the first step in a story about {topic}",
-            f"A challenge or turning point related to {topic}",
-            f"Progress and change related to {topic}",
-            f"An inspiring final scene about {topic}",
+    lines = re.split(r"(?<=[.!?।])\s+|\n+", (story or "").strip())
+    lines = [re.sub(r"\s+", " ", s).strip(" -•\t") for s in lines if s.strip()]
+    if not lines:
+        lines = [
+            f"Opening and establishing imagery for {topic}",
+            f"Beginning the journey in {topic}",
+            f"Challenge, change, or discovery in {topic}",
+            f"Progress and hope connected to {topic}",
+            f"Emotional ending and resolution for {topic}",
         ]
-    stages = ["wide establishing shot", "medium shot showing action", "close-up of meaningful details",
-              "dynamic movement shot", "wide emotional closing shot"]
-    scenes = []
-    for i in range(count):
-        seed = chunks[i % len(chunks)]
-        if len(chunks) == 1 and count > 1:
-            seed = f"{stages[i % len(stages)]}: {seed}"
-        scenes.append(
-            f"{seed}. Cinematic photorealistic live-action footage, coherent visual story, "
-            "natural human movement, expressive composition, beautiful practical lighting, "
-            "smooth camera movement, no text, no subtitles, no logos."
-        )
-    return scenes
+    return [lines[i % len(lines)] for i in range(count)]
 
-def download_https(url: str, target: Path, max_bytes: int = 250_000_000) -> None:
-    if urlparse(url).scheme != "https":
-        raise RuntimeError("Media provider returned a non-HTTPS URL.")
-    with requests.get(url, stream=True, timeout=(20, 120)) as response:
-        response.raise_for_status()
-        total = 0
-        with target.open("wb") as out:
-            for chunk in response.iter_content(1024 * 1024):
-                if not chunk:
-                    continue
-                total += len(chunk)
-                if total > max_bytes:
-                    raise RuntimeError("A downloaded clip exceeded the 250 MB limit.")
-                out.write(chunk)
-    if not target.exists() or target.stat().st_size < 1024:
-        raise RuntimeError("Media download was empty or incomplete.")
+def keywords_for(scene: str, topic: str) -> list[str]:
+    # Prefer concrete visual nouns over long prose for archive search.
+    text = re.sub(r"[^A-Za-z0-9 ]", " ", scene + " " + topic).lower()
+    words = [w for w in text.split() if len(w) > 3 and w not in {
+        "with", "from", "that", "this", "into", "about", "scene", "imagery",
+        "opening", "ending", "connected", "related", "story", "showing", "their",
+        "there", "where", "while", "through", "emotional", "cinematic", "video",
+    }]
+    return list(dict.fromkeys(words))[:6]
 
 def search_archive(query: str) -> list[dict]:
-    # Public Internet Archive search endpoint; no API key is required.
-    terms = re.sub(r"[^A-Za-z0-9 ]", " ", query).strip()
-    terms = " ".join(terms.split()[:7])
-    if not terms:
-        return []
-    response = requests.get(ARCHIVE_SEARCH, params={
-        "q": f"mediatype:movies AND {terms}",
-        "fl[]": ["identifier", "title", "description", "licenseurl"],
-        "rows": 12, "page": 1, "output": "json"
-    }, timeout=35)
+    response = requests.get(
+        ARCHIVE_SEARCH,
+        params={
+            "q": f'mediatype:movies AND (title:("{query}") OR subject:("{query}"))',
+            "fl[]": ["identifier", "title", "description", "licenseurl"],
+            "rows": 15, "page": 1, "output": "json",
+        },
+        headers={"User-Agent": USER_AGENT}, timeout=(10, 30),
+    )
     response.raise_for_status()
     return response.json().get("response", {}).get("docs", [])
 
-def archive_metadata(identifier: str) -> dict:
-    response = requests.get(f"{ARCHIVE_METADATA}{identifier}", timeout=35)
+def fetch_metadata(identifier: str) -> dict:
+    response = requests.get(
+        ARCHIVE_METADATA + quote(identifier, safe=""),
+        headers={"User-Agent": USER_AGENT}, timeout=(10, 30),
+    )
     response.raise_for_status()
     return response.json()
 
-def archive_license_allowed(metadata: dict) -> bool:
-    # Require an explicit public-domain or Creative Commons license in item metadata.
-    license_text = " ".join(str(metadata.get(k, "")) for k in ("licenseurl", "rights", "license")).lower()
-    return any(term in license_text for term in (
+def license_is_open(meta: dict) -> bool:
+    # Conservative allowlist. Items with no explicit license are not downloaded.
+    values = " ".join(str(meta.get(k, "")) for k in ("licenseurl", "rights", "license")).lower()
+    return any(x in values for x in (
         "creativecommons.org/publicdomain", "creativecommons.org/licenses/by/",
-        "creativecommons.org/licenses/by-sa/", "creativecommons.org/licenses/zero/"
-    ))
+        "creativecommons.org/licenses/by-sa/", "creativecommons.org/licenses/zero/",
+        "creativecommons.org/publicdomain/zero",
+    )) or "public domain" in values
 
-def choose_archive_video(metadata: dict, size: tuple[int, int]) -> str | None:
+def select_video_file(files: list[dict]) -> str | None:
     candidates = []
-    for item in metadata.get("files", []):
+    for item in files:
         name = str(item.get("name", ""))
         fmt = str(item.get("format", "")).lower()
-        if name.lower().endswith((".mp4", ".m4v", ".mov", ".webm")) or "mpeg4" in fmt or "webm" in fmt:
-            try:
-                file_size = int(item.get("size") or 0)
-            except (TypeError, ValueError):
-                file_size = 0
-            if file_size >= 200_000 and not name.lower().endswith(("_thumb.mp4", "_preview.mp4")):
-                candidates.append((file_size, name))
-    if not candidates:
-        return None
-    candidates.sort(key=lambda x: (0 if x[1].lower().endswith(".mp4") else 1,
-                                   abs(min(x[0], 150_000_000) - 35_000_000)))
-    return candidates[0][1]
+        if not (name.lower().endswith((".mp4", ".m4v", ".mov", ".webm")) or
+                "mpeg4" in fmt or "webm" in fmt):
+            continue
+        if any(x in name.lower() for x in ("thumb", "thumbnail", "preview", "sample")):
+            continue
+        try:
+            size = int(item.get("size") or 0)
+        except (TypeError, ValueError):
+            size = 0
+        if 200_000 <= size <= 250_000_000:
+            candidates.append((0 if name.lower().endswith(".mp4") else 1, abs(size - 25_000_000), name))
+    candidates.sort()
+    return candidates[0][2] if candidates else None
 
-def get_stock_clip(scene: str, orientation: str, size: tuple[int, int],
-                   target: Path, used_ids: set[str]) -> tuple[str, str]:
-    queries = list(dict.fromkeys([scene.split(".")[0][:90], " ".join(scene.split()[:6]),
-                                  " ".join(scene.split()[:3])]))
-    for query in queries:
-        for item in search_archive(query):
-            identifier = str(item.get("identifier", ""))
-            if not identifier or identifier in used_ids:
-                continue
-            try:
-                data = archive_metadata(identifier)
-                meta = data.get("metadata", {})
-                if not archive_license_allowed(meta):
+def download_media(url: str, destination: Path) -> None:
+    if urlparse(url).scheme != "https":
+        raise RuntimeError("The footage provider returned an unsafe URL.")
+    with requests.get(url, headers={"User-Agent": USER_AGENT}, stream=True, timeout=(15, 90)) as r:
+        r.raise_for_status()
+        total = 0
+        with destination.open("wb") as out:
+            for chunk in r.iter_content(1024 * 1024):
+                if not chunk:
                     continue
-                filename = choose_archive_video(data, size)
+                total += len(chunk)
+                if total > 250_000_000:
+                    raise RuntimeError("The downloaded stock clip exceeded 250 MB.")
+                out.write(chunk)
+    if not destination.exists() or destination.stat().st_size < 1000:
+        raise RuntimeError("The downloaded footage was empty.")
+
+def get_stock_clip(scene: str, topic: str, destination: Path, used: set[str]) -> tuple[str, str] | None:
+    words = keywords_for(scene, topic)
+    queries = [" ".join(words[:4]), " ".join(words[:2]), topic.strip()]
+    for query in dict.fromkeys(q for q in queries if q):
+        try:
+            for item in search_archive(query):
+                identifier = str(item.get("identifier", ""))
+                if not identifier or identifier in used:
+                    continue
+                data = fetch_metadata(identifier)
+                meta = data.get("metadata", {})
+                if not license_is_open(meta):
+                    continue
+                filename = select_video_file(data.get("files", []))
                 if not filename:
                     continue
-                media_url = f"https://archive.org/download/{identifier}/{requests.utils.quote(filename, safe='/')}"
-                download_https(media_url, target, max_bytes=250_000_000)
-                used_ids.add(identifier)
-                title = meta.get("title") or item.get("title") or identifier
-                return f"Internet Archive footage — {title} (CC/public domain)", f"https://archive.org/details/{identifier}"
-            except (requests.RequestException, RuntimeError, ValueError):
-                continue
-    raise RuntimeError(
-        f"No downloadable public-domain/Creative Commons video was found for: {queries[-1]}. "
-        "Try a simpler topic (for example nature, mountains, city, ocean) or increase the AI footage percentage."
-    )
+                url = f"https://archive.org/download/{quote(identifier, safe='')}/{quote(filename, safe='/')}"
+                try:
+                    download_media(url, destination)
+                except (requests.RequestException, RuntimeError):
+                    continue
+                used.add(identifier)
+                title = str(meta.get("title") or item.get("title") or identifier)
+                return title, f"https://archive.org/details/{quote(identifier, safe='')}"
+        except (requests.RequestException, ValueError, KeyError):
+            continue
+    return None
 
-def generate_ai_clip(prompt: str, endpoint: str, token: str, aspect_ratio: str, target: Path, status_line) -> None:
-    """Request a clip from the user's temporary, self-hosted Wan 2.1 Colab runtime."""
-    base = endpoint.strip().rstrip("/")
-    if not base.startswith("https://"):
-        raise RuntimeError("Colab endpoint must be the HTTPS trycloudflare.com URL printed by the notebook.")
-    headers = {"X-API-Token": token}
-    response = requests.post(
-        f"{base}/generate",
-        headers=headers,
-        json={"prompt": prompt, "width": 832, "height": 480, "num_frames": 33, "num_inference_steps": 20},
-        timeout=60,
-    )
-    if not response.ok:
-        raise RuntimeError(f"Colab Wan server returned HTTP {response.status_code}: {response.text[:1000]}")
-    job_id = response.json().get("job_id")
-    if not job_id:
-        raise RuntimeError("Colab Wan server did not return a job ID. Restart the Colab notebook and try again.")
-    deadline = time.time() + 1200
-    while time.time() < deadline:
-        check = requests.get(f"{base}/status/{job_id}", headers=headers, timeout=30)
-        check.raise_for_status()
-        info = check.json()
-        status = str(info.get("status", "")).lower()
-        status_line(f"Wan 2.1 on Colab: {status or 'waiting'}…")
-        if status == "completed":
-            video = requests.get(f"{base}/download/{job_id}", headers=headers, timeout=180)
-            video.raise_for_status()
-            target.write_bytes(video.content)
-            if target.stat().st_size < 1024:
-                raise RuntimeError("Colab returned an empty video. Check the notebook output for errors.")
-            return
-        if status == "failed":
-            raise RuntimeError("Wan 2.1 generation failed in Colab: " + str(info.get("error", "Unknown error"))[:1200])
-        time.sleep(4)
-    raise RuntimeError("Wan 2.1 generation took over 20 minutes. The free Colab runtime may be overloaded or disconnected.")
-
-def normalize_clip(source: Path, target: Path, size: tuple[int, int]) -> None:
+def normalize_stock(source: Path, target: Path, size: tuple[int, int], seconds: float) -> None:
     w, h = size
-    vf = f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},setsar=1,fps=30,format=yuv420p"
-    run_command(["ffmpeg", "-y", "-i", str(source), "-an", "-vf", vf,
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-movflags", "+faststart", str(target)])
+    vf = (f"scale={w}:{h}:force_original_aspect_ratio=increase,"
+          f"crop={w}:{h},setsar=1,fps=30,format=yuv420p")
+    run_command([
+        "ffmpeg", "-y", "-stream_loop", "-1", "-i", str(source), "-t", f"{seconds:.3f}",
+        "-an", "-vf", vf, "-c:v", "libx264", "-preset", "ultrafast",
+        "-crf", "25", "-movflags", "+faststart", str(target),
+    ])
 
-def assemble_video(clips: list[Path], audio: Path, output: Path, work: Path,
-                   size: tuple[int, int], progress) -> None:
-    audio_duration = probe_duration(audio)
-    total = sum(probe_duration(p) for p in clips)
-    if total <= 0:
-        raise RuntimeError("No usable clip duration was found.")
-    repeats = max(1, math.ceil(audio_duration / total))
-    playlist = work / "clips.txt"
-    lines = []
-    for _ in range(repeats):
-        for path in clips:
-            escaped = path.resolve().as_posix().replace("'", "'\\\\''")
-            lines.append(f"file '{escaped}'")
-    playlist.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    progress.progress(0.86, text="Joining footage and adding your soundtrack…")
+def make_animated_scene(target: Path, size: tuple[int, int], seconds: float, seed: int) -> None:
+    """Generate a moving abstract music-video background without any external service."""
     w, h = size
-    run_command(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(playlist),
-        "-i", str(audio), "-map", "0:v:0", "-map", "1:a:0", "-t", f"{audio_duration:.3f}",
+    palettes = [
+        ("0x07152B", "0x1E6B83"), ("0x24113D", "0xB03A73"),
+        ("0x081F17", "0x4E9A68"), ("0x321609", "0xD17A28"),
+        ("0x11112E", "0x5265D8"), ("0x29101C", "0xC94D5A"),
+    ]
+    c1, c2 = palettes[seed % len(palettes)]
+    # Animated flowing gradients, subtle pulses, and geometric rings; no text.
+    vf = (
+        f"geq=r='(1-Y/H)*255*0.03+{int(c1[2:4],16)}*(Y/H)+"
+        f"{int(c2[2:4],16)}*(1-Y/H)*0.2':"
+        f"g='(1-Y/H)*{int(c1[4:6],16)}+Y/H*{int(c2[4:6],16)}':"
+        f"b='(1-Y/H)*{int(c1[6:8],16)}+Y/H*{int(c2[6:8],16)}',"
+        f"drawbox=x='mod(t*{23+seed%13}+{seed*17},{w})':"
+        f"y=0:w={max(12,w//90)}:h={h}:color=white@0.10:t=fill,"
+        f"drawbox=x=0:y='mod(t*{17+seed%11}+{seed*31},{h})':"
+        f"w={w}:h={max(8,h//120)}:color=white@0.06:t=fill,"
+        f"eq=brightness='0.03*sin(2*PI*t/4)':saturation=1.25,"
+        f"format=yuv420p"
+    )
+    # FFmpeg's geq color syntax varies across builds; use a robust color source
+    # and animated light bands for maximum Streamlit Cloud compatibility.
+    fallback_vf = (
+        f"drawbox=x='mod(t*{max(20,w//30)}+{seed*19},{w})':y=0:"
+        f"w={max(30,w//8)}:h={h}:color={c2}@0.32:t=fill,"
+        f"drawbox=x=0:y='mod(t*{max(12,h//35)}+{seed*23},{h})':"
+        f"w={w}:h={max(20,h//9)}:color=white@0.07:t=fill,"
+        f"eq=brightness='0.04*sin(2*PI*t/5)':saturation=1.35,format=yuv420p"
+    )
+    try:
+        run_command([
+            "ffmpeg", "-y", "-f", "lavfi", "-i",
+            f"color=c={c1}:s={w}x{h}:r=24:d={seconds:.3f}",
+            "-vf", fallback_vf, "-an", "-c:v", "libx264", "-preset", "ultrafast",
+            "-crf", "25", "-pix_fmt", "yuv420p", str(target),
+        ])
+    except RuntimeError:
+        # Basic fallback still produces a valid moving clip.
+        run_command([
+            "ffmpeg", "-y", "-f", "lavfi", "-i",
+            f"color=c={c1}:s={w}x{h}:r=24:d={seconds:.3f}",
+            "-vf", "format=yuv420p", "-an", "-c:v", "libx264",
+            "-preset", "ultrafast", "-pix_fmt", "yuv420p", str(target),
+        ])
+
+def build_mp4(clips: list[Path], audio: Path, output: Path, work: Path,
+              size: tuple[int, int], audio_duration: float, progress) -> None:
+    # Concatenate normalized clips and map the original uploaded soundtrack.
+    playlist = work / "concat.txt"
+    playlist.write_text("".join(f"file '{p.resolve().as_posix()}'\n" for p in clips), encoding="utf-8")
+    w, h = size
+    progress.progress(0.88, text="Joining scenes and adding the original MP3…")
+    run_command([
+        "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(playlist), "-i", str(audio),
+        "-map", "0:v:0", "-map", "1:a:0", "-t", f"{audio_duration:.3f}",
         "-vf", f"scale={w}:{h},setsar=1,fps=30,format=yuv420p",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-c:a", "aac",
-        "-b:a", "192k", "-af", "aresample=async=1", "-shortest", "-movflags", "+faststart", str(output)])
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "24",
+        "-c:a", "aac", "-b:a", "192k", "-af", "aresample=async=1",
+        "-shortest", "-movflags", "+faststart", str(output),
+    ])
 
-st.title("🎬 AI Music Video Studio")
-st.write("Upload a song and enter a topic/story. Generate short clips with open-source Wan 2.1 running on your own Google Colab GPU session, then combine them with your soundtrack.")
-st.info("No paid video API is used. Wan 2.1 is open source; Google Colab free GPU availability and session duration are controlled by Google. Stock footage can be used for scenes you do not generate with AI.")
+st.title("🎬 Free Music Video Studio")
+st.write("**MP3 in → MP4 out.** Create a story-based music video with free licensed stock footage, animated scenes, and your original soundtrack.")
+st.info("Free and open-source workflow: no Colab, no paid AI/video API, and no API key. Stock clips are only used when the source explicitly lists a recognized Creative Commons or public-domain license. If no suitable licensed clip is found, an animated visual scene is generated locally.")
 
-with st.expander("Connect free open-source AI (Google Colab)", expanded=True):
-    st.markdown(
-        "1. Open the [Wan 2.1 Colab notebook in this GitHub repository](https://github.com/Servejit/AI-video/blob/main/wan_colab.ipynb). "
-        "2. Open it in Google Colab and run the cells using **Runtime → Change runtime type → T4 GPU** (if available). "
-        "3. Copy the HTTPS tunnel URL and access token printed by the final cell into the fields below. "
-        "Keep the token private. The notebook must stay running while your Streamlit app generates clips."
-    )
-    colab_url = st.text_input("Colab HTTPS endpoint URL", placeholder="https://example.trycloudflare.com").strip().rstrip("/")
-    colab_token = st.text_input("Colab access token", type="password", help="Paste the token printed by your Colab notebook.").strip()
-
-topic = st.text_input("1. Video topic", placeholder="e.g. Never give up, Punjabi motivational song")
-story = st.text_area("2. Story or scene guidance (optional)",
-    placeholder="Write a short story or put one scene on each line.", height=120)
-song = st.file_uploader("3. Upload your soundtrack", type=AUDIO_TYPES)
+topic = st.text_input("1. Video topic", placeholder="e.g. Never give up, motivational song")
+story = st.text_area("2. Story or scene guidance (optional)", placeholder="Write a short story or put one scene on each line.", height=120)
+song = st.file_uploader("3. Upload your MP3", type=["mp3"])
 format_name = st.selectbox("4. Video format", list(FORMATS.keys()))
-mix = st.slider("AI-generated footage in the mix (%)", 0, 100, 40, 20,
-    help="Remaining scenes use real stock footage from Internet Archive. Wan 2.1 runs in your own Colab session; no paid video API is called.")
-scene_count = st.slider("Number of scenes", 2, 12, 6)
-st.caption("Wan 2.1 generates short 480p clips. The app resizes them to your selected format and repeats the scene sequence if needed to cover the song. Vertical/square formats are cropped from the generated landscape clip.")
+scene_count = st.slider("5. Number of scenes", 3, 12, 6)
+stock_percent = st.slider("6. Stock footage preference (%)", 0, 100, 70, 10,
+    help="Higher values try more free licensed footage. If suitable footage cannot be found, the app creates animated scenes instead.")
+st.caption("No captions, lyrics, subtitles, or text overlays are added. Scene durations are matched to the MP3. Longer songs take more processing time.")
 
-if st.button("Generate music video", type="primary", disabled=not (topic.strip() and song)):
-    size, aspect_ratio, orientation = FORMATS[format_name]
-    ai_count = round(scene_count * mix / 100)
-    stock_count = scene_count - ai_count
-    if ai_count and (not colab_url or not colab_token):
-        st.error("For AI-generated scenes, start the Wan 2.1 Google Colab notebook and enter its HTTPS endpoint URL and access token. Set AI-generated footage to 0% to use only stock footage without connecting Colab.")
-    elif ai_count and not colab_url.startswith("https://"):
-        st.error("The Colab endpoint must start with https://.")
-    elif not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
-        st.error("FFmpeg and FFprobe are required. Ensure ffmpeg is listed in packages.txt and the app has redeployed.")
+if st.button("Generate MP4", type="primary", disabled=not (topic.strip() and song)):
+    if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+        st.error("FFmpeg/FFprobe is not installed. Check packages.txt in your Streamlit repository and redeploy.")
+    elif len(song.getvalue()) > 100 * 1024 * 1024:
+        st.error("The MP3 is larger than 100 MB. Please upload a smaller file.")
     else:
-        scenes = make_scenes(topic.strip(), story, scene_count)
-        ai_slots = set()
-        if ai_count:
-            for j in range(ai_count):
-                ai_slots.add(round(j * (scene_count - 1) / max(1, ai_count - 1)) if ai_count > 1 else scene_count // 2)
-        while len(ai_slots) > ai_count:
-            ai_slots.remove(max(ai_slots))
-        while len(ai_slots) < ai_count:
-            ai_slots.add(next(i for i in range(scene_count) if i not in ai_slots))
-        progress = st.progress(0, text="Preparing your scenes…")
-        credits = []
+        size = FORMATS[format_name]
+        progress = st.progress(0, text="Preparing your soundtrack and story…")
+        credits: list[dict] = []
         used_ids: set[str] = set()
         try:
-            with tempfile.TemporaryDirectory(prefix="ai_music_video_") as temp_dir:
-                work = Path(temp_dir)
-                audio = work / ("soundtrack" + (Path(song.name).suffix.lower() or ".mp3"))
+            with tempfile.TemporaryDirectory(prefix="free_music_video_") as temp:
+                work = Path(temp)
+                audio = work / "song.mp3"
                 audio.write_bytes(song.getvalue())
-                normalized_clips = []
+                duration = probe_duration(audio)
+                scenes = make_scenes(topic.strip(), story, scene_count)
+                # Split total song duration evenly, ensuring no clip has a zero duration.
+                scene_seconds = duration / scene_count
+                clips: list[Path] = []
+                preferred_stock_count = round(scene_count * stock_percent / 100)
+                stock_slots = set()
+                if preferred_stock_count:
+                    stock_slots = {
+                        round(i * (scene_count - 1) / max(1, preferred_stock_count - 1))
+                        if preferred_stock_count > 1 else scene_count // 2
+                        for i in range(preferred_stock_count)
+                    }
                 for index, scene in enumerate(scenes):
-                    raw = work / f"raw_{index:03d}.mp4"
-                    normalized = work / f"clip_{index:03d}.mp4"
-                    is_ai = index in ai_slots
                     status = st.empty()
-                    status.info(f"Scene {index + 1}/{scene_count}: {'Generating open-source Wan 2.1 footage on Colab' if is_ai else 'Searching stock footage'}")
-                    if is_ai:
-                        generate_ai_clip(scene, colab_url, colab_token, aspect_ratio, raw,
-                            lambda message: status.info(f"Scene {index + 1}/{scene_count}: {message}"))
-                        source_label, source_url = "AI-generated footage (Wan 2.1, Google Colab)", ""
+                    raw = work / f"raw_{index:03d}.mp4"
+                    normalized = work / f"scene_{index:03d}.mp4"
+                    source_title = ""
+                    source_url = ""
+                    use_stock = index in stock_slots
+                    status.info(f"Scene {index + 1}/{scene_count}: " +
+                                ("Searching for free licensed footage…" if use_stock else "Creating animated scene…"))
+                    if use_stock:
+                        found = get_stock_clip(scene, topic.strip(), raw, used_ids)
                     else:
-                        source_label, source_url = get_stock_clip(scene, orientation, size, raw, used_ids)
-                    normalize_clip(raw, normalized, size)
-                    normalized_clips.append(normalized)
-                    credits.append({"scene": index + 1, "type": source_label, "source": source_url, "prompt": scene})
-                    progress.progress(0.05 + 0.75 * (index + 1) / scene_count, text=f"Prepared scene {index + 1} of {scene_count}")
+                        found = None
+                    if found:
+                        source_title, source_url = found
+                        normalize_stock(raw, normalized, size, scene_seconds)
+                        source_type = "Internet Archive stock footage (check source license)"
+                    else:
+                        make_animated_scene(normalized, size, scene_seconds, index + len(topic))
+                        source_type = "Locally generated animated visual"
+                        if use_stock:
+                            source_title = "No suitable explicitly licensed stock clip found; animated scene used instead."
+                    clips.append(normalized)
+                    credits.append({"scene": index + 1, "description": scene,
+                                    "type": source_type, "title": source_title, "url": source_url})
+                    progress.progress(0.06 + 0.78 * (index + 1) / scene_count,
+                                      text=f"Prepared scene {index + 1} of {scene_count}")
                     status.empty()
-                output = work / "ai_music_video.mp4"
-                assemble_video(normalized_clips, audio, output, work, size, progress)
+                output = work / "music_video.mp4"
+                build_mp4(clips, audio, output, work, size, duration, progress)
                 video_bytes = output.read_bytes()
-            progress.progress(1.0, text="Video ready.")
-            st.success("Your music video is ready — no captions or text overlays were added.")
+            progress.progress(1.0, text="MP4 ready.")
+            st.success("Your MP4 is ready with the original MP3 soundtrack.")
             st.video(video_bytes)
-            st.download_button("Download MP4", data=video_bytes, file_name="ai_music_video.mp4",
-                mime="video/mp4", type="primary")
-            with st.expander("Scene sources and credits"):
+            st.download_button("Download MP4", data=video_bytes, file_name="music_video.mp4",
+                               mime="video/mp4", type="primary")
+            with st.expander("Scene details and footage credits"):
                 for item in credits:
                     st.markdown(f"**Scene {item['scene']} — {item['type']}**")
-                    if item["source"]:
-                        st.markdown(f"[View source clip]({item['source']})")
-                    st.caption(item["prompt"])
-                st.markdown("Stock footage searched from [Internet Archive](https://archive.org/details/movies). Review each clip’s source page and license before publishing.")
+                    st.write(item["description"])
+                    if item["title"]:
+                        st.caption(item["title"])
+                    if item["url"]:
+                        st.markdown(f"[View source and license]({item['url']})")
+                st.markdown("Review each stock clip's source page and license before publishing or monetizing your finished video.")
         except Exception as exc:
-            st.error("The video could not be created.")
+            st.error("Video creation failed.")
             st.code(str(exc))
-            st.caption("For Wan 2.1 errors, confirm the Colab runtime is still connected and the endpoint/token match. Free GPU access is not guaranteed. Check the Colab cell output for model or memory errors.")
+            st.caption("Try a shorter MP3 or fewer scenes. The app does not use paid services; processing capacity depends on the available Streamlit server resources.")
 
-st.caption("Wan 2.1 model: Apache-2.0 license. Internet Archive items have item-specific rights; review each source page and license before publishing.")
+st.caption("Uses FFmpeg and the public Internet Archive metadata/search service. Stock footage is optional and item-specific licensing must be verified before reuse.")
