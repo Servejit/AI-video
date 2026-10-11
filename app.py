@@ -58,7 +58,7 @@ def token() -> str:
         value = st.secrets.get("REPLICATE_API_TOKEN", "")
     except Exception:
         value = ""
-    return value or os.getenv("REPLICATE_API_TOKEN", "")
+    return (value or os.getenv("REPLICATE_API_TOKEN", "")).strip()
 
 def save_model_file(output: Any, path: Path) -> Path:
     if isinstance(output, (list, tuple)):
@@ -83,7 +83,10 @@ def save_model_file(output: Any, path: Path) -> Path:
 def transcribe(song: Path) -> str:
     try:
         with song.open("rb") as f:
-            result = replicate.run(WHISPER, input={"audio": f})
+            # Streamlit Secrets are not automatically exported as environment variables.
+            # Pass the token explicitly so Replicate authenticates with the saved secret.
+            client = replicate.Client(api_token=token())
+            result = client.run(WHISPER, input={"audio": f})
         if isinstance(result, dict):
             return str(result.get("transcription") or result.get("text") or "").strip()
         return str(result).strip()
@@ -109,7 +112,9 @@ def prompts_for(transcript: str, count: int, filename: str) -> list[str]:
     ]
 
 def make_clip(prompt: str, path: Path) -> Path:
-    result = replicate.run(MODEL, input={"prompt": prompt, "prompt_optimizer": True})
+    # Pass the token explicitly; do not rely on the SDK finding it in the process environment.
+    client = replicate.Client(api_token=token())
+    result = client.run(MODEL, input={"prompt": prompt, "prompt_optimizer": True})
     return save_model_file(result, path)
 
 def make_master(clips: list[Path], song: Path, target: Path) -> Path:
