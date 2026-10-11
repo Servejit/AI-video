@@ -51,7 +51,7 @@ def transcribe_audio(audio_path: Path, model_size: str = "tiny") -> str:
         condition_on_previous_text=False,
     )
     parts = [segment.text.strip() for segment in segments if segment.text.strip()]
-    return "\\n".join(parts)
+    return "\n".join(parts)
 
 def command(args: list[str], timeout: int = 1800) -> tuple[bool, str]:
     try:
