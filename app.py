@@ -549,9 +549,9 @@ st.caption("Uses FFmpeg, yt-dlp to search YouTube for clips marked Creative Comm
 st.divider()
 st.header("🎞️ Google Flow — Full Video Prompt + Final Music Mix")
 st.write(
-    "Upload the song, create a prompt for one 30-second Google Flow video with five "
-    "unique six-second scenes, then upload the generated video here. The final MP4 "
-    "will use your MP3 as its only audio track and match the MP3 duration."
+    "Upload the song and create a language-aware prompt for a 30-second visual sequence with five unique scenes. "
+    "If Google Flow cannot render 30 seconds in one generation, create the scenes separately and assemble them in order. "
+    "The final MP4 uses your MP3 as its only audio track and matches the MP3 duration."
 )
 
 flow_song = st.file_uploader(
@@ -606,8 +606,14 @@ def make_single_flow_prompt(song_duration: float, theme: str, lyrics_text: str,
     clean_lyrics = _re.sub(r"\s+", " ", (lyrics_text or "").strip())
     theme_text = (theme or "").strip() or "Let the song's lyrics and emotional progression define the theme"
     character_text = (character or "").strip() or (
-        "Use a visually consistent lead character wherever the story benefits from continuity; "
-        "keep face, age, hairstyle and clothing consistent between scenes."
+        "Choose the lead character's identity, language, appearance, clothing, setting and social details "
+        "to fit the language and cultural context of the supplied lyrics—not a random default. If lyrics are "
+        "Punjabi (Gurmukhi or Roman Punjabi), use a believable Punjabi/South Asian adult lead and context; "
+        "if Hindi, use a believable Indian/Hindi-speaking context; if Tamil, Telugu, Bengali, Marathi or another "
+        "language, use a respectful, locally appropriate character and setting for that language. If lyrics are "
+        "English, follow the user's theme and story rather than automatically assuming a Western character. "
+        "Avoid caricatures and costumes that do not fit the lyrics. Keep the same fictional lead's face, age, "
+        "skin tone, hairstyle and wardrobe consistent in every scene."
     )
 
     # Divide supplied lyrics into sequential, distinct story beats. If lyrics were
@@ -658,12 +664,13 @@ def make_single_flow_prompt(song_duration: float, theme: str, lyrics_text: str,
             "and a beginning, escalating challenge, turning point and satisfying ending."
         )
 
-    return f"""Create ONE COMPLETE, COHESIVE MUSIC VIDEO for the uploaded soundtrack. This is one master prompt for the entire video, not a prompt for a single shot.
+    return f"""Create a cohesive, lyric-led music video for the uploaded soundtrack.
 
-GOOGLE FLOW CLIP DURATION: EXACTLY 30 seconds (00:00.00–00:30.00). Generate one 30-second silent video clip, regardless of the full MP3 length. The uploaded MP3 is {song_duration:.3f} seconds long and will be fitted during final editing. Use exactly 5 distinct scenes, approximately 6 seconds each, with the timecodes listed below. Cover the entire 30-second clip continuously from 00:00.00 to 00:30.00. Do not stretch one scene to fill time, and do not repeat footage.
+IMPORTANT DURATION REALITY: The target finished Google Flow sequence is 30 seconds, from 00:00.00 to 00:30.00. Some Flow generation modes only produce a short clip per generation, so do not assume that one prompt guarantees a 30-second file. Create the five timed sections below as five separate, sequential clips if the current Flow mode cannot render all 30 seconds at once. Aim for about 6 seconds per section; if Flow offers a shorter fixed duration, generate the longest supported clip for each section and use Flow's extend/scene-assembly tools to reach 30 seconds. Do not accept a 0.08-second result as a completed clip: regenerate it. Never slow a tiny clip down or freeze one frame to fake a 30-second video.
 
 THEME / CREATIVE DIRECTION: {theme_text}
 VISUAL STYLE: {visual_style}
+LANGUAGE AND CULTURAL MATCH: Identify the language from the supplied lyrics when possible. The lead character, dialogue-free performance, setting, clothing, gestures, architecture and cultural details must feel natural for that language and the lyric's meaning. For Punjabi lyrics, use a believable Punjabi/South Asian character and context; for Hindi lyrics, a believable Indian context; for other Indian languages, choose a respectful, locally appropriate context. For English lyrics, follow the theme and lyrics rather than assuming a particular ethnicity. Do not use stereotypes or mismatched cultural cues. The video is silent, so communicate through believable physical acting and expressions, not spoken words.
 CHARACTER CONTINUITY: {character_text}
 
 LYRIC AND MUSIC RULES:
@@ -732,10 +739,10 @@ if st.session_state.get("generated_flow_master_prompt"):
         mime="text/plain",
         key="download_flow_master_prompt"
     )
-    st.caption(
-        "The prompt is intentionally for one 30-second clip: five unique scenes of about "
-        "six seconds each. Google Flow controls its actual generation limits, so verify "
-        "the generated clip duration before final editing."
+    st.warning(
+        "Important: the prompt requests a 30-second sequence, but Google Flow may limit each generation to a shorter clip. "
+        "If it returns only a few seconds—or 0.08 seconds—regenerate that clip or create the five scenes separately, "
+        "then assemble them in order. The app cannot force Flow's generator to render longer than its current limit."
     )
 
 st.divider()
@@ -778,23 +785,35 @@ if st.button(
                 song_path.write_bytes(final_song.getvalue())
                 input_video_path.write_bytes(final_video.getvalue())
                 song_duration = probe_duration(song_path)
+                input_video_duration = probe_duration(input_video_path)
+                if input_video_duration < 1.0:
+                    raise RuntimeError(
+                        f"The uploaded video is only {input_video_duration:.3f} seconds long. "
+                        "This is not a valid 30-second Flow clip. Regenerate it in Google Flow, "
+                        "or generate the five scenes separately and combine them before uploading. "
+                        "The app will not pretend a 0.08-second result is a complete video."
+                    )
                 final_progress.progress(0.25, text="Replacing all original video audio…")
-                # The MP3 defines the master timeline. Loop only the video if it is
-                # shorter, cut the video at the exact MP3 duration, and never map
-                # any audio from the Google Flow file. Do not use -shortest here:
-                # it could stop early if the video stream has a shorter packet timeline.
+                # Normalize the video first, then loop actual moving footage only when
+                # it is shorter than the song. The original Flow audio is never mapped.
                 run_command([
                     "ffmpeg", "-y", "-stream_loop", "-1", "-i", str(input_video_path),
                     "-i", str(song_path),
                     "-map", "0:v:0", "-map", "1:a:0",
                     "-t", f"{song_duration:.6f}",
-                    "-vf", "setsar=1,format=yuv420p",
+                    "-vf", "setpts=PTS-STARTPTS,fps=30,setsar=1,format=yuv420p",
                     "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
                     "-c:a", "aac", "-b:a", "192k",
                     "-af", "aresample=async=1",
                     "-movflags", "+faststart",
                     str(final_output_path)
                 ])
+                final_duration = probe_duration(final_output_path)
+                if abs(final_duration - song_duration) > 1.0:
+                    raise RuntimeError(
+                        f"Export duration check failed: MP3 is {song_duration:.2f}s but final MP4 is "
+                        f"{final_duration:.2f}s. Please try a standard MP4 export from Google Flow."
+                    )
                 final_progress.progress(0.95, text="Checking the finished MP4…")
                 if not final_output_path.exists() or final_output_path.stat().st_size < 1000:
                     raise RuntimeError("FFmpeg did not produce a valid output MP4.")
