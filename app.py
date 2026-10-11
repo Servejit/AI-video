@@ -690,7 +690,7 @@ STRICT AUDIO AND TEXT:
 Silent video only. Absolutely no audible voice, dialogue, singing, soundtrack, music or sound effects. No subtitles, lyrics on screen, captions, titles, logos or watermarks. Do not generate text to represent the lyrics.
 
 OUTPUT:
-Generate ONE 30-second video clip only. Include all five scenes in the listed order within the 00:00.00–00:30.00 timeline. Do not generate a longer video, and do not repeat or recycle any scene. The final editor will use the original uploaded MP3 as the only soundtrack and will align the finished export to the MP3 duration."""
+Target a complete 30-second silent sequence. If Flow cannot render 30 seconds in one generation, create five separate clips in the listed order, one for each timed scene, and assemble them sequentially. Keep the same lead character, face, age, hairstyle, clothing and visual style across every clip. Never repeat or recycle scenes. Check the actual duration of each result; if Flow returns only 0.08 seconds, regenerate it instead of treating it as complete. The final editor will use the original uploaded MP3 as the only soundtrack and align the finished export to the MP3 duration."""
 
 flow_generate = st.button(
     "Generate my single Google Flow prompt",
