@@ -131,7 +131,11 @@ def download_media(url: str, destination: Path) -> None:
 
 def get_stock_clip(scene: str, topic: str, destination: Path, used: set[str]) -> tuple[str, str] | None:
     words = keywords_for(scene, topic)
-    # Always include human-action searches so an AI outage does not mean we only\n    # search for scenery implied by the story text. These remain subject to the\n    # explicit-license allowlist below.\n    queries = [" ".join(words[:4]), " ".join(words[:2]), topic.strip(),\n               "people walking", "man and woman talking", "people working", "people helping"]
+    # Always include human-action searches so an AI outage does not mean we only
+    # search for scenery implied by the story text. These remain subject to the
+    # explicit-license allowlist below.
+    queries = [" ".join(words[:4]), " ".join(words[:2]), topic.strip(),
+               "people walking", "man and woman talking", "people working", "people helping"]
     for query in dict.fromkeys(q for q in queries if q):
         try:
             for item in search_archive(query):
