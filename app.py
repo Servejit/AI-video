@@ -170,34 +170,51 @@ def get_stock_clip(scene: str, topic: str, destination: Path, used: set[str]) ->
             continue
     return None
 
-def make_ai_prompt(topic: str, scene: str, index: int, total: int) -> str:
-    """Turn a story beat into a short, photorealistic cinematic music-video shot."""
-    continuity = (
-        "Maintain character continuity across all shots. The lead is a photorealistic South Asian man "
-        "in his early 30s, short dark hair, subtle stubble, expressive eyes, wearing a charcoal jacket "
-        "and plain dark shirt. His co-star is a photorealistic South Asian woman in her late 20s, "
-        "long dark hair, expressive face, wearing a tasteful contemporary outfit that fits the scene. "
-        "Both are fictional adult actors. Show realistic skin texture, natural anatomy, believable "
-        "eye contact, nuanced emotions, and physically plausible movement."
+def make_ai_prompt(topic: str, scene: str, index: int, total: int,
+                   performance_mode: str, action_intensity: str) -> str:
+    """Create an action-led cinematic music-video prompt."""
+    character_bible = (
+        "Use the same fictional adult South Asian male lead in every shot: early 30s, short dark hair, "
+        "subtle stubble, charcoal jacket and dark shirt. If needed, use the same adult South Asian female "
+        "co-star with long dark hair and consistent wardrobe. Preserve faces, hair, clothing and relationships. "
+        "Realistic anatomy, clear facial acting, believable weight and momentum."
     )
+    modes = {
+        "Cinematic story + dance": (
+            "Blend literal story acting with dance performance. Act out the lyric as a real physical event; "
+            "on refrains, confidence, struggle or victory, add visible full-body choreography, rhythmic footwork, "
+            "arm movements, turns and expressive gestures. Never replace action with a static pose."
+        ),
+        "Cinematic story acting": (
+            "Focus on dramatic narrative acting. Show the lead physically doing the lyric: exerting effort, "
+            "overcoming an obstacle, stumbling, getting up, running, helping someone, reaching a goal or celebrating "
+            "as appropriate to the exact words. Each shot has a clear action and outcome, not passive standing."
+        ),
+        "Dance and performance": (
+            "Focus on energetic music-video dance. Show full-body adult performers with coordinated footwork, "
+            "arm choreography, turns, torso movement, expressive gestures and confident facial performance. "
+            "Keep the entire body and feet visible during dance; use an active tracking camera. No static posing."
+        ),
+    }
+    intensity = {
+        "Natural": "Use natural but clearly visible movement and acting.",
+        "Strong": "Use strong readable body movement, decisive gestures, expressive reactions and active camera blocking.",
+        "High-energy": "Use high-energy choreography, committed physical acting, dynamic tracking and dramatic reactions throughout.",
+    }
     return (
-        f"Photorealistic live-action feature-film scene, shot {index + 1} of {total}. "
-        f"Story theme: {topic}. Exact beat from the song/story, in order: {scene}. {continuity} "
-        "DIRECTOR'S RULE: illustrate the meaning of this exact beat with one clear, physically visible "
-        "human action. Do not choose a random attractive shot or generic scenery. Translate the words "
-        "into a literal mini-event with a beginning and an outcome: if the beat describes a struggle, "
-        "show the lead encountering a real obstacle; if it describes falling, show a stumble or setback; "
-        "if it describes rising or hope, show the lead standing up, taking a step, or continuing forward; "
-        "if it describes love or support, show the characters looking at, speaking to, or helping each "
-        "other. These are examples only—follow the actual beat, not an unrelated example. Keep the same "
-        "lead character, wardrobe, relationships, and chronological story across shots. Each new shot must "
-        "continue the previous story, not restart it. Human actors must be clearly visible and doing the "
-        "described action. No unrelated landscape cutaways, stock-montage feeling, visual metaphors that "
-        "ignore the lyric, or generic smiling/walking unless that is what the beat means. "
-        "Photorealistic live-action feature-film footage, natural facial expressions and believable "
-        "body mechanics, cinematic blocking, eye-level and over-the-shoulder coverage, subtle camera "
-        "movement, realistic lens depth of field, practical lighting, filmic contrast. One continuous "
-        "shot, no text, no subtitles, no logos, no watermarks, no collage, no split screen, no frozen people."
+        f"Premium photorealistic live-action feature-film music video, shot {index + 1} of {total}. "
+        f"Theme: {topic}. EXACT LYRIC/STORY BEAT TO SHOW, in order: {scene}. {character_bible} "
+        f"{modes[performance_mode]} {intensity[action_intensity]} "
+        "ACTION RULE: the actor's face and body must visibly move from the start to the end of the shot. "
+        "Act out the exact lyric literally; do not merely show a mood or a matching landscape. If the words describe "
+        "struggle, show effort against a real obstacle; falling, show a setback; rising or refusing to stop, show "
+        "getting up and continuing; support or love, show a real interaction; success, show a physical victory. "
+        "These are examples only—follow the actual lyric. Cinematic shot design with readable medium/wide framing, "
+        "motivated dolly-in or tracking/orbit movement, close-ups for real emotional reactions, practical dramatic "
+        "lighting, realistic locations, depth of field, natural motion blur and polished film color grading. "
+        "This must look like moving live-action footage, not a slideshow, portrait or landscape montage. "
+        "No frozen posing, unrelated scenery, random smiling/walking, text, subtitles, logos, watermarks, collage or split screen. "
+        "One continuous shot with believable physical motion."
     )
 
 def generate_ai_clip(prompt: str, target: Path, size: tuple[int, int], seed: int) -> None:
@@ -305,7 +322,7 @@ def build_mp4(clips: list[Path], audio: Path, output: Path, work: Path,
     ])
 
 st.title("🎬 Free Music Video Studio")
-st.write("**MP3 in → MP4 out.** Automatically try to generate photorealistic AI video scenes using a public open-model GPU Space, then finish the music video with your original song.")
+st.write("**MP3 in → MP4 out.** Build a lyric-led music video with cinematic acting, dance performance, or a combination, using your original song.")
 st.info("Free-only best-effort AI generation: the app automatically calls a public Hugging Face LTX-2 open-model Space for short clips. Public free GPU availability, queue times, and quotas are not guaranteed. If generation fails, actor-first mode searches for explicitly licensed live-action footage even when stock preference is set to 0; it will stop rather than substitute abstract animation. No paid API is used.")
 
 topic = st.text_input("1. Video topic", placeholder="e.g. Never give up, motivational song")
@@ -323,11 +340,23 @@ ai_clips = st.file_uploader(
     help="Optional only. If you do not upload clips, the app tries to generate photorealistic AI clips automatically using a public open-model Space. Uploaded clips take priority."
 )
 format_name = st.selectbox("5. Video format", list(FORMATS.keys()))
-scene_count = st.slider("6. Number of scenes / AI generation attempts", 2, 8, 3)
-stock_percent = st.slider("7. Stock footage preference (%)", 0, 100, 0, 10,
+performance_mode = st.selectbox(
+    "6. Performance style",
+    ["Cinematic story + dance", "Cinematic story acting", "Dance and performance"],
+    index=0,
+    help="Choose story acting, full-body dance, or a combination."
+)
+action_intensity = st.selectbox(
+    "7. Action intensity",
+    ["Strong", "High-energy", "Natural"],
+    index=0,
+    help="Asks the model for more visible movement and expressive acting; results still depend on the free video model."
+)
+scene_count = st.slider("8. Number of scenes / AI generation attempts", 2, 8, 4)
+stock_percent = st.slider("9. Stock footage preference (%)", 0, 100, 0, 10,
     help="Set to 0 to prioritize AI-generated actor scenes. Higher values try free licensed footage, but footage may not match your exact story.")
 require_humans = st.checkbox("Prioritize real-looking male/female actors; stop rather than substitute abstract animation", value=True, help="Recommended for a movie-style result. If free AI generation and suitable footage both fail, the app will explain the failure instead of making an abstract video.")
-st.caption("For the closest lyric-to-action match, paste the lyrics above in the correct order. Without lyrics, the app only has your topic/story and cannot know what each sung line means. Free video models may still imperfectly follow prompts.")
+st.caption("Paste lyrics in order for the best match. Prompts now emphasize visible acting, full-body dance, movement and cinematic camera work according to your chosen style. Free models may still miss actions or character continuity; this improves direction but cannot guarantee studio-film quality.")
 
 if st.button("Generate MP4", type="primary", disabled=not (topic.strip() and song)):
     if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
@@ -382,7 +411,7 @@ if st.button("Generate MP4", type="primary", disabled=not (topic.strip() and son
                         status.info(f"Scene {index + 1}/{scene_count}: trying public open-model AI video generation…")
                         try:
                             generate_ai_clip(
-                                make_ai_prompt(topic.strip(), scene, index, scene_count),
+                                make_ai_prompt(topic.strip(), scene, index, scene_count, performance_mode, action_intensity),
                                 raw, size, index + len(topic) * 17,
                             )
                             normalize_stock(raw, normalized, size, scene_seconds)
