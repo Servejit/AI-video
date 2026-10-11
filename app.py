@@ -236,24 +236,6 @@ def create_still_image_video(
     return output_path
 
 
-def comfy_upload_audio(base_url: str, song_path: Path) -> str:
-    """Upload audio as a ComfyUI input file and return its server-side name."""
-    with song_path.open("rb") as handle:
-        response = requests.post(
-            f"{base_url.rstrip('/')}/upload/image",
-            files={"image": (song_path.name, handle, "application/octet-stream")},
-            data={"type": "input", "overwrite": "true"},
-            timeout=300,
-        )
-    response.raise_for_status()
-    data = response.json()
-    name = data.get("name")
-    if not name:
-        raise RuntimeError(f"ComfyUI upload returned no filename: {data}")
-    subfolder = data.get("subfolder", "")
-    return f"{subfolder}/{name}" if subfolder else name
-
-
 def queue_comfy_workflow(base_url: str, workflow: dict[str, Any]) -> str:
     response = requests.post(
         f"{base_url.rstrip('/')}/prompt",
@@ -461,16 +443,20 @@ if "project" in st.session_state:
 
     st.header("5. Optional ComfyUI AI rendering")
     st.write(
-        "Connect a running ComfyUI server. Upload an API-format workflow exported "
-        "from ComfyUI. Set the audio loader and prompt node IDs/field names below "
-        "to match your chosen workflow. A generic workflow may not support audio "
-        "conditioning; use the custom nodes and model workflow required by your setup."
+        "Connect a running ComfyUI server and upload an API-format workflow. "
+        "ComfyUI does not provide one universal audio-upload API for every custom "
+        "workflow, so copy your song into the ComfyUI input folder first and enter "
+        "its server-side filename below. Configure the exact node IDs and input keys."
     )
     comfy_url = st.text_input(
         "ComfyUI base URL", placeholder="https://your-secure-comfyui-server"
     )
     workflow_upload = st.file_uploader(
         "ComfyUI API workflow (.json)", type=["json"], key="comfy_workflow"
+    )
+    remote_audio_filename = st.text_input(
+        "Song filename already in ComfyUI input folder (optional)",
+        placeholder="source_song.mp3",
     )
     audio_node_id = st.text_input("Audio loader node ID (optional)")
     audio_input_key = st.text_input("Audio filename input field", value="audio")
@@ -495,9 +481,12 @@ if "project" in st.session_state:
                 if not isinstance(workflow, dict):
                     raise ValueError("Workflow JSON must be an object keyed by node ID.")
                 if audio_node_id.strip():
-                    remote_audio = comfy_upload_audio(
-                        comfy_url, Path(st.session_state["song_path"])
-                    )
+                    if not remote_audio_filename.strip():
+                        raise ValueError(
+                            "Copy the song into the ComfyUI input folder and enter "
+                            "its filename, or leave the audio node ID empty if the "
+                            "workflow does not use an audio loader."
+                        )
                     if audio_node_id not in workflow:
                         raise ValueError(f"Audio node ID {audio_node_id} was not found.")
                     inputs = workflow[audio_node_id].setdefault("inputs", {})
@@ -506,7 +495,7 @@ if "project" in st.session_state:
                             f"Input field '{audio_input_key}' not found in audio node. "
                             "Check your workflow JSON and enter the exact input key."
                         )
-                    inputs[audio_input_key] = remote_audio
+                    inputs[audio_input_key] = remote_audio_filename.strip()
                 if prompt_node_id.strip() and run_one_workflow:
                     if prompt_node_id not in workflow:
                         raise ValueError(f"Prompt node ID {prompt_node_id} was not found.")
