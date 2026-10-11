@@ -203,7 +203,7 @@ with st.expander("API access setup", expanded=True):
         "[Get a Pixabay API key](https://pixabay.com/api/docs/)"
     )
     fal_key = get_secret("FAL_KEY", "fal.ai API key (required when AI clips are selected)", "Used privately by the server to request AI-generated video.")
-    pexels_key = get_secret("PEXELS_API_KEY", "Pixabay API key (required when stock clips are selected)", "Used privately to search and download stock video.")
+    pixabay_key = get_secret("PIXABAY_API_KEY", "Pixabay API key (required when stock clips are selected)", "Used privately to search and download stock video.")
 
 topic = st.text_input("1. Video topic", placeholder="e.g. Never give up, Punjabi motivational song")
 story = st.text_area("2. Story or scene guidance (optional)",
@@ -211,7 +211,7 @@ story = st.text_area("2. Story or scene guidance (optional)",
 song = st.file_uploader("3. Upload your soundtrack", type=AUDIO_TYPES)
 format_name = st.selectbox("4. Video format", list(FORMATS.keys()))
 mix = st.slider("AI-generated footage in the mix (%)", 0, 100, 40, 20,
-    help="Remaining scenes use real stock footage from Pexels. AI generation may be billed by the provider.")
+    help="Remaining scenes use real stock footage from Pixabay. AI generation may be billed by the provider.")
 scene_count = st.slider("Number of scenes", 2, 12, 6)
 st.caption("Each AI scene is a short clip. The app repeats the scene sequence if needed to cover the song.")
 
@@ -221,8 +221,8 @@ if st.button("Generate music video", type="primary", disabled=not (topic.strip()
     stock_count = scene_count - ai_count
     if ai_count and not fal_key:
         st.error("Enter a fal.ai API key or configure FAL_KEY in Streamlit secrets.")
-    elif stock_count and not pexels_key:
-        st.error("Enter a Pixabay API key or configure PEXELS_API_KEY in Streamlit secrets.")
+    elif stock_count and not pixabay_key:
+        st.error("Enter a Pixabay API key or configure PIXABAY_API_KEY in Streamlit secrets.")
     elif not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
         st.error("FFmpeg and FFprobe are required. Ensure ffmpeg is listed in packages.txt and the app has redeployed.")
     else:
@@ -255,7 +255,7 @@ if st.button("Generate music video", type="primary", disabled=not (topic.strip()
                             lambda message: status.info(f"Scene {index + 1}/{scene_count}: {message}"))
                         source_label, source_url = "AI-generated footage (fal.ai)", ""
                     else:
-                        source_label, source_url = get_stock_clip(scene, pexels_key, orientation, size, raw, used_ids)
+                        source_label, source_url = get_stock_clip(scene, pixabay_key, orientation, size, raw, used_ids)
                     normalize_clip(raw, normalized, size)
                     normalized_clips.append(normalized)
                     credits.append({"scene": index + 1, "type": source_label, "source": source_url, "prompt": scene})
@@ -275,10 +275,10 @@ if st.button("Generate music video", type="primary", disabled=not (topic.strip()
                     if item["source"]:
                         st.markdown(f"[View source clip]({item['source']})")
                     st.caption(item["prompt"])
-                st.markdown("Stock footage provided by [Pexels](https://pixabay.com/).")
+                st.markdown("Stock footage provided by [Pixabay](https://pixabay.com/).")
         except Exception as exc:
             st.error("The video could not be created.")
             st.code(str(exc))
             st.caption("Check API keys, provider credits/limits, internet access, and FFmpeg deployment logs.")
 
-st.caption("Use AI provider services according to their terms. Pixabay footage is subject to the Pexels license and API guidelines.")
+st.caption("Use AI provider services according to their terms. Pixabay footage is subject to the Pixabay Content License and API guidelines.")
