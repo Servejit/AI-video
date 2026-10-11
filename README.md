@@ -18,6 +18,9 @@ This repository is an integration/frontend and does not bundle the upstream cust
 - Check a ComfyUI job and download output videos/images.
 - Create an MP4 from uploaded still images with the original song as audio.
 - Choose 16:9, 9:16, or 1:1 for the still-image MP4.
+- Export a generated MP4 for Instagram Reels/Stories/feed, Facebook Reels/feed, WhatsApp Status, YouTube/Shorts, TikTok, X, LinkedIn, Pinterest Idea Pins, and a universal 720p preset.
+- Platform exports normalize dimensions/aspect ratio, frame rate, H.264 video, AAC audio, and fast-start MP4 metadata.
+- Choose crop-to-fill, blurred background, or black bars; optionally replace generated audio with the original uploaded song.
 
 ## Important limitations
 
@@ -25,9 +28,10 @@ This repository is an integration/frontend and does not bundle the upstream cust
 2. The generic ComfyUI connector cannot infer every custom workflow. Node IDs and input names vary. Set the correct audio-loader node and prompt node in the app. Your workflow must accept the supplied inputs and produce an output node that ComfyUI records in history.
 3. The current connector queues one workflow job using Scene 1's prompt. It does not automatically render every storyboard scene as a separate clip or stitch ComfyUI clips into a full song-length video. That requires a workflow-specific adapter for the exact ComfyUI workflow and nodes you use.
 4. The still-image fallback is not AI video generation: it sequences still images and adds the song.
-5. Streamlit Community Cloud has limited memory, disk, execution time, and no guaranteed GPU. Long video rendering is better hosted on a GPU machine. Do not expose an unauthenticated ComfyUI server to the public internet.
-6. Working files are stored in the local music_video_output directory. Hosted environments may delete these files when restarted or redeployed. Download outputs you need to keep.
-7. For best lyric matching, paste verified lyrics manually. Speech recognition may mishear sung vocals, names, accents, or non-English lyrics.
+5. Platform presets are practical export targets, not a guarantee of acceptance; platform upload specifications and limits can change. Check the destination app before publishing. Cropping can remove content near the edges, so preview the exported file.
+6. Streamlit Community Cloud has limited memory, disk, execution time, and no guaranteed GPU. Long video rendering is better hosted on a GPU machine. Do not expose an unauthenticated ComfyUI server to the public internet.
+7. Working files are stored in the local music_video_output directory. Hosted environments may delete these files when restarted or redeployed. Download outputs you need to keep.
+8. For best lyric matching, paste verified lyrics manually. Speech recognition may mishear sung vocals, names, accents, or non-English lyrics.
 
 ## Deploy on Streamlit Community Cloud
 
