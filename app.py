@@ -540,3 +540,269 @@ if st.button("Generate MP4", type="primary", disabled=not (topic.strip() and son
             st.caption("Try a shorter MP3 or fewer scenes. The app does not use paid services; processing capacity depends on the available Streamlit server resources.")
 
 st.caption("Uses FFmpeg, yt-dlp to search YouTube for clips marked Creative Commons, the public Internet Archive metadata/search service, and best-effort access to the public Lightricks/LTX-2 Hugging Face Space. A Creative Commons label is not a substitute for checking actual rights and license terms. Respect platform terms and obtain permission where required.")
+
+
+# ---------------------------------------------------------------------------
+# Google Flow: one song-specific prompt + final soundtrack replacement
+# This section is additive: the original automatic MP4 maker above remains.
+# ---------------------------------------------------------------------------
+st.divider()
+st.header("🎞️ Google Flow — Full Video Prompt + Final Music Mix")
+st.write(
+    "Upload the song, create one complete prompt tailored to its lyrics and mood, "
+    "generate the video in Google Flow, then upload that video here. The final MP4 "
+    "will use your MP3 as its only audio track."
+)
+
+flow_song = st.file_uploader(
+    "A. Upload the song for this Google Flow video (MP3)",
+    type=["mp3"], key="flow_song_mp3"
+)
+flow_theme = st.text_input(
+    "B. Song theme / visual direction (optional)",
+    placeholder="e.g. Punjabi motivational song, persistence, setbacks, victory",
+    key="flow_theme"
+)
+flow_lyrics = st.text_area(
+    "C. Paste the lyrics (recommended for song-specific scenes)",
+    placeholder="Paste lyrics in song order. Use line breaks between lyric lines or verses.",
+    height=150,
+    key="flow_lyrics",
+    help=(
+        "The app can measure the uploaded MP3's duration, but it cannot reliably know "
+        "the exact words of a song from the audio file alone. Paste lyrics to make the "
+        "scene sequence closely follow this particular song."
+    )
+)
+flow_style = st.selectbox(
+    "D. Visual style",
+    [
+        "Cinematic story with emotional acting",
+        "Motivational cinematic story",
+        "Punjabi celebration and dance",
+        "Romantic cinematic story",
+        "Inspirational documentary style",
+        "Custom / follow the lyrics",
+    ],
+    key="flow_style"
+)
+flow_character = st.text_input(
+    "E. Main character / continuity (optional)",
+    placeholder="e.g. same fictional Punjabi man throughout; consistent face and clothes",
+    key="flow_character"
+)
+flow_scene_seconds = st.slider(
+    "F. Approximate scene length in seconds",
+    min_value=3, max_value=12, value=6, key="flow_scene_seconds",
+    help="The prompt asks Flow to use varied scene lengths around this target; the model may not follow exact timing."
+)
+
+def make_single_flow_prompt(song_duration: float, theme: str, lyrics_text: str,
+                            visual_style: str, character: str, target_scene_seconds: int) -> str:
+    import math as _math
+    import re as _re
+
+    total_scenes = max(5, min(24, _math.ceil(song_duration / max(3, target_scene_seconds))))
+    clean_lyrics = _re.sub(r"\\s+", " ", (lyrics_text or "").strip())
+    theme_text = (theme or "").strip() or "Let the song's lyrics and emotional progression define the theme"
+    character_text = (character or "").strip() or (
+        "Use a visually consistent lead character wherever the story benefits from continuity; "
+        "keep face, age, hairstyle and clothing consistent between scenes."
+    )
+
+    # Divide supplied lyrics into sequential, distinct story beats. If lyrics were
+    # not supplied, direct Flow to create a coherent story from the song's musical
+    # energy and the user's theme rather than pretending the lyrics were analyzed.
+    if clean_lyrics:
+        lyric_lines = [
+            _re.sub(r"\\s+", " ", line).strip(" -•")
+            for line in _re.split(r"\\n+|(?<=[.!?।])\\s+", lyrics_text.strip())
+            if line.strip()
+        ]
+        if not lyric_lines:
+            lyric_lines = [clean_lyrics]
+        beats = []
+        for i in range(total_scenes):
+            start = round(i * len(lyric_lines) / total_scenes)
+            end = round((i + 1) * len(lyric_lines) / total_scenes)
+            if end <= start:
+                end = min(len(lyric_lines), start + 1)
+            segment = " ".join(lyric_lines[start:end]).strip()
+            if not segment:
+                segment = lyric_lines[min(start, len(lyric_lines) - 1)]
+            beats.append(f"{i+1}. VISUALIZE THIS LYRIC BEAT: “{segment}”. Show a concrete, literal action that expresses its meaning; advance the story.")
+        beat_text = "\\n".join(beats)
+        lyric_instruction = (
+            "Treat the supplied lyrics below as the story source and preserve their order. "
+            "Interpret each beat visually, not with on-screen words. Do not invent a different song or change the lyric order."
+        )
+    else:
+        beat_text = "\\n".join(
+            f"{i+1}. Create a new story beat that advances the song's visual narrative, with a different action, "
+            "location and composition from every other scene."
+            for i in range(total_scenes)
+        )
+        lyric_instruction = (
+            "No lyrics were supplied. Do not claim to know or quote the song's words. "
+            "Build a coherent visual arc using the stated theme, the song's emotional energy, "
+            "and a beginning, escalating challenge, turning point and satisfying ending."
+        )
+
+    return f"""Create ONE COMPLETE, COHESIVE MUSIC VIDEO for the uploaded soundtrack. This is one master prompt for the entire video, not a prompt for a single shot.
+
+SONG DURATION: approximately {song_duration:.1f} seconds. Plan a complete beginning-to-end story for the full song. Use about {total_scenes} distinct scenes, targeting roughly {target_scene_seconds} seconds per scene while allowing timing to follow musical phrases, verses, refrains, pauses and the ending.
+
+THEME / CREATIVE DIRECTION: {theme_text}
+VISUAL STYLE: {visual_style}
+CHARACTER CONTINUITY: {character_text}
+
+LYRIC AND MUSIC RULES:
+{lyric_instruction}
+Use visual pacing that responds to the song's emotional rise and fall. Let major musical changes motivate scene transitions and action intensity. Keep the visuals emotionally appropriate to the song. The MP3 will be added separately during final editing, so generate the video SILENT: no speech, no dialogue, no singing, no voice-over, no crowd voices, no sound effects, and no generated music.
+
+ORDERED SCENE PLAN — every scene must be unique:
+{beat_text}
+
+NON-REPETITION RULES:
+Every scene must introduce a new meaningful action and a visibly different setting, camera composition or story development. Never repeat, replay, loop, mirror, duplicate or recycle footage. Do not show the same action twice from another angle just to fill time. Avoid repetitive montages. Each scene must move the story forward; use fresh locations, props, actions, framing and camera movement. Do not create a slideshow.
+
+CINEMATIC QUALITY:
+Photorealistic, polished live-action cinema, expressive believable acting, natural body mechanics, meaningful movement from the beginning to the end of each shot, clear visual storytelling, motivated camera movement, cinematic lighting, realistic environments, consistent characters and wardrobe where applicable, smooth transitions, coherent geography and a purposeful final shot. Match shot scale and energy to the moment in the song. Do not leave the lead frozen in a pose; show actions with a clear start, development and finish.
+
+STRICT AUDIO AND TEXT:
+Silent video only. Absolutely no audible voice, dialogue, singing, soundtrack, music or sound effects. No subtitles, lyrics on screen, captions, titles, logos or watermarks. Do not generate text to represent the lyrics.
+
+OUTPUT:
+Generate the entire music video as one continuous, coherent video if the tool supports it. If Google Flow has a per-generation duration limit, create the planned scenes in this exact order without repeating any scene, then assemble them in order. The final video must cover the full song duration. The original uploaded MP3 will be the only soundtrack in the final edit."""
+
+flow_generate = st.button(
+    "Generate my single Google Flow prompt",
+    type="primary",
+    key="flow_generate_prompt",
+    disabled=not bool(flow_song)
+)
+if flow_generate:
+    if len(flow_song.getvalue()) > 100 * 1024 * 1024:
+        st.error("The MP3 is larger than 100 MB. Please upload a smaller file.")
+    else:
+        flow_temp_audio = None
+        try:
+            with tempfile.TemporaryDirectory(prefix="flow_prompt_") as flow_tmp:
+                flow_temp_audio = Path(flow_tmp) / "flow_song.mp3"
+                flow_temp_audio.write_bytes(flow_song.getvalue())
+                flow_duration = probe_duration(flow_temp_audio)
+            flow_prompt = make_single_flow_prompt(
+                flow_duration, flow_theme, flow_lyrics, flow_style,
+                flow_character, flow_scene_seconds
+            )
+            st.session_state["generated_flow_master_prompt"] = flow_prompt
+            st.session_state["generated_flow_song_name"] = flow_song.name
+            st.session_state["generated_flow_song_bytes"] = flow_song.getvalue()
+            st.session_state["generated_flow_song_duration"] = flow_duration
+            st.success(f"Prompt generated for “{flow_song.name}” ({flow_duration:.1f} seconds).")
+        except Exception as exc:
+            st.error(f"Could not analyze the MP3: {exc}")
+
+if st.session_state.get("generated_flow_master_prompt"):
+    st.subheader("Your complete Google Flow prompt")
+    st.caption(
+        "Copy the entire prompt into Google Flow. For the closest match to your song, "
+        "paste its lyrics above before generating the prompt."
+    )
+    st.text_area(
+        "Single master prompt — copy all text",
+        value=st.session_state["generated_flow_master_prompt"],
+        height=460,
+        key="flow_master_prompt_display"
+    )
+    st.download_button(
+        "Download prompt as TXT",
+        data=st.session_state["generated_flow_master_prompt"].encode("utf-8"),
+        file_name="google_flow_full_video_prompt.txt",
+        mime="text/plain",
+        key="download_flow_master_prompt"
+    )
+    st.caption(
+        "Google Flow controls its own generation limits. A single prompt cannot guarantee "
+        "that Flow will render a feature-length video in one generation; the prompt includes "
+        "an ordered no-repeat scene plan for tools that require multiple clips."
+    )
+
+st.divider()
+st.subheader("🎧 Finalize your Google Flow video with the original MP3")
+st.write(
+    "After Google Flow finishes, upload its generated video here. The app strips the video's "
+    "audio and replaces it with the uploaded MP3, so any generated voice, dialogue or music is removed."
+)
+final_song = st.file_uploader(
+    "G. Original song MP3 for the final soundtrack",
+    type=["mp3"], key="final_song_mp3"
+)
+final_video = st.file_uploader(
+    "H. Upload the Google Flow generated video",
+    type=["mp4", "mov", "m4v", "webm"], key="final_flow_video"
+)
+if st.button(
+    "Create final video — remove Flow audio and use MP3",
+    type="primary",
+    key="flow_finalize_video",
+    disabled=not (final_song and final_video)
+):
+    if len(final_song.getvalue()) > 100 * 1024 * 1024:
+        st.error("The MP3 is larger than 100 MB. Please upload a smaller file.")
+    elif len(final_video.getvalue()) > 500 * 1024 * 1024:
+        st.error("The video is larger than 500 MB. Please upload a smaller video.")
+    elif not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+        st.error("FFmpeg/FFprobe is not installed. Check packages.txt in your Streamlit repository and redeploy.")
+    else:
+        final_progress = st.progress(0, text="Preparing the uploaded video and song…")
+        try:
+            with tempfile.TemporaryDirectory(prefix="flow_final_video_") as final_tmp:
+                final_work = Path(final_tmp)
+                song_path = final_work / "original_song.mp3"
+                video_suffix = Path(final_video.name).suffix.lower()
+                if video_suffix not in (".mp4", ".mov", ".m4v", ".webm"):
+                    video_suffix = ".mp4"
+                input_video_path = final_work / ("flow_input" + video_suffix)
+                final_output_path = final_work / "final_music_video.mp4"
+                song_path.write_bytes(final_song.getvalue())
+                input_video_path.write_bytes(final_video.getvalue())
+                song_duration = probe_duration(song_path)
+                final_progress.progress(0.25, text="Replacing all original video audio…")
+                # -stream_loop repeats a short generated video to cover the song.
+                # Explicitly map video from input 0 and audio only from input 1.
+                # No audio stream from the Google Flow upload can reach the output.
+                run_command([
+                    "ffmpeg", "-y", "-stream_loop", "-1", "-i", str(input_video_path),
+                    "-i", str(song_path),
+                    "-map", "0:v:0", "-map", "1:a:0",
+                    "-t", f"{song_duration:.3f}",
+                    "-vf", "setsar=1,format=yuv420p",
+                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+                    "-c:a", "aac", "-b:a", "192k",
+                    "-af", "aresample=async=1",
+                    "-shortest", "-movflags", "+faststart",
+                    str(final_output_path)
+                ])
+                final_progress.progress(0.95, text="Checking the finished MP4…")
+                if not final_output_path.exists() or final_output_path.stat().st_size < 1000:
+                    raise RuntimeError("FFmpeg did not produce a valid output MP4.")
+                final_bytes = final_output_path.read_bytes()
+            final_progress.progress(1.0, text="Finished — original MP3 is the only audio track.")
+            st.success("Final video ready. The uploaded Google Flow video's original audio has been discarded.")
+            st.video(final_bytes)
+            st.download_button(
+                "Download final music video MP4",
+                data=final_bytes,
+                file_name="final_music_video.mp4",
+                mime="video/mp4",
+                type="primary",
+                key="download_final_flow_video"
+            )
+        except Exception as exc:
+            st.error("Could not finalize the video.")
+            st.code(str(exc))
+            st.caption(
+                "Try an MP4 export from Google Flow or a shorter video/song if the server runs out of memory. "
+                "The final export contains the uploaded MP3 audio only."
+            )
