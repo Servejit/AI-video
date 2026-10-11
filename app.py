@@ -160,18 +160,26 @@ def get_stock_clip(scene: str, topic: str, destination: Path, used: set[str]) ->
 def make_ai_prompt(topic: str, scene: str, index: int, total: int) -> str:
     """Turn a story beat into a short, photorealistic cinematic music-video shot."""
     continuity = (
-        "Keep the same fictional lead character throughout the music video: "
-        "a photorealistic South Asian man in his early 30s, short dark hair, "
-        "subtle stubble, expressive eyes, wearing a charcoal jacket and plain dark shirt. "
-        "Natural human anatomy, realistic skin texture, believable movement."
+        "Maintain character continuity across all shots. The lead is a photorealistic South Asian man "
+        "in his early 30s, short dark hair, subtle stubble, expressive eyes, wearing a charcoal jacket "
+        "and plain dark shirt. His co-star is a photorealistic South Asian woman in her late 20s, "
+        "long dark hair, expressive face, wearing a tasteful contemporary outfit that fits the scene. "
+        "Both are fictional adult actors. Show realistic skin texture, natural anatomy, believable "
+        "eye contact, nuanced emotions, and physically plausible movement."
     )
     return (
-        f"Photorealistic live-action cinematic music album video, shot {index + 1} of {total}. "
-        f"Story theme: {topic}. Specific action: {scene}. {continuity} "
-        "One continuous 3-second shot with clear visible physical action, natural facial expression, "
-        "cinematic camera movement, realistic lens depth of field, filmic contrast, practical lighting, "
-        "subtle atmospheric haze, beautifully composed frame, premium feature-film cinematography. "
-        "No text, no subtitles, no logos, no watermarks, no collage, no split screen."
+        f"Photorealistic live-action feature-film scene, shot {index + 1} of {total}. "
+        f"Story theme: {topic}. Scene action to portray on camera: {scene}. {continuity} "
+        "This must look like footage from a real dramatic movie, not an illustration, slideshow, "
+        "music visualizer, landscape montage, or abstract animation. Human actors are the subject "
+        "and must be clearly visible in frame. Show the man and woman together when appropriate; "
+        "otherwise show the character whose action is central. Give each actor a clear role and "
+        "specific visible action: walking, speaking to one another, reacting, helping, struggling, "
+        "celebrating, or expressing the emotion required by the scene. Natural facial expressions, "
+        "credible gestures, cinematic blocking, eye-level and over-the-shoulder coverage, subtle "
+        "handheld or dolly camera movement, realistic lens depth of field, practical lighting, "
+        "filmic contrast, premium feature-film cinematography. One continuous shot, no text, "
+        "no subtitles, no logos, no watermarks, no collage, no split screen, no frozen people."
     )
 
 def generate_ai_clip(prompt: str, target: Path, size: tuple[int, int], seed: int) -> None:
@@ -292,9 +300,9 @@ ai_clips = st.file_uploader(
 )
 format_name = st.selectbox("5. Video format", list(FORMATS.keys()))
 scene_count = st.slider("6. Number of scenes / AI generation attempts", 2, 8, 3)
-stock_percent = st.slider("7. Stock footage preference (%)", 0, 100, 70, 10,
-    help="Higher values try more free licensed footage. If suitable footage cannot be found, the app creates animated scenes instead.")
-st.caption("No captions, lyrics, subtitles, or text overlays are added. Automatic AI shots are short and may repeat to cover a full-length song. For best results, start with 2–3 scenes; public free GPU quotas can run out.")
+stock_percent = st.slider("7. Stock footage preference (%)", 0, 100, 0, 10,
+    help="Set to 0 to prioritize AI-generated actor scenes. Higher values try free licensed footage, but footage may not match your exact story.")
+require_humans = st.checkbox("Prioritize real-looking male/female actors; stop rather than substitute abstract animation", value=True, help="Recommended for a movie-style result. If free AI generation and suitable footage both fail, the app will explain the failure instead of making an abstract video.")\nst.caption("Movie mode asks for visible fictional adult male and female actors performing specific actions. Free AI generation is not guaranteed; for reliable character continuity, upload your own generated actor clips if needed.")
 
 if st.button("Generate MP4", type="primary", disabled=not (topic.strip() and song)):
     if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
@@ -368,8 +376,16 @@ if st.button("Generate MP4", type="primary", disabled=not (topic.strip() and son
                                 normalize_stock(raw, normalized, size, scene_seconds)
                                 source_type = "Internet Archive stock footage (check source license)"
                             else:
+                                if require_humans:
+                                    raise RuntimeError(
+                                        f"Scene {index + 1} could not be generated with visible actors. "
+                                        "The free AI video service may be unavailable or out of quota, and no suitable "
+                                        "explicitly licensed human-actor clip was found. To keep movie quality, no abstract "
+                                        "animation was substituted. Try again later, lower the scene count, increase stock "
+                                        "footage preference, or upload your own AI-generated actor clips."
+                                    )
                                 make_animated_scene(normalized, size, scene_seconds, index + len(topic))
-                                source_type = "Locally generated animated visual (AI fallback)"
+                                source_type = "Locally generated animated visual (fallback; not live-action)"
                                 source_title = (
                                     "AI generation failed: " + ai_error
                                     if ai_error else
