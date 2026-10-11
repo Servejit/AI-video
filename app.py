@@ -40,18 +40,27 @@ def probe_duration(path: Path) -> float:
     except ValueError as exc:
         raise RuntimeError("The audio duration could not be read.") from exc
 
-def make_scenes(topic: str, story: str, count: int) -> list[str]:
-    lines = re.split(r"(?<=[.!?।])\s+|\n+", (story or "").strip())
+def make_scenes(topic: str, story: str, lyrics: str, count: int) -> list[str]:
+    """Build ordered scene beats from pasted lyrics first, then story guidance."""
+    source = (lyrics or "").strip() or (story or "").strip()
+    lines = re.split(r"\n+|(?<=[.!?।])\s+", source)
     lines = [re.sub(r"\s+", " ", s).strip(" -•\t") for s in lines if s.strip()]
     if not lines:
         lines = [
-            f"Opening and establishing imagery for {topic}",
-            f"Beginning the journey in {topic}",
-            f"Challenge, change, or discovery in {topic}",
-            f"Progress and hope connected to {topic}",
-            f"Emotional ending and resolution for {topic}",
+            "The lead character faces a difficult starting point and feels determined to change.",
+            "Show a concrete setback that tests the lead character's resolve.",
+            "The lead character takes action, works hard, and refuses to give up.",
+            "Show visible progress and a meaningful moment of support or connection.",
+            "The lead character reaches a hopeful resolution through their own effort.",
         ]
-    return [lines[i % len(lines)] for i in range(count)]
+    # Divide the lyric/story beats into ordered groups so each scene covers its
+    # own part of the song instead of repeating one unrelated generic prompt.
+    groups = []
+    for i in range(count):
+        start = round(i * len(lines) / count)
+        end = round((i + 1) * len(lines) / count)
+        groups.append(" | ".join(lines[start:end]) if end > start else lines[min(start, len(lines)-1)])
+    return [f"Song/story beat: {groups[i]}. Create a literal, visible action that communicates this meaning. Video scene {i+1} of {count}; progress the same story forward." for i in range(count)]
 
 def keywords_for(scene: str, topic: str) -> list[str]:
     # Prefer concrete visual nouns over long prose for archive search.
@@ -173,17 +182,22 @@ def make_ai_prompt(topic: str, scene: str, index: int, total: int) -> str:
     )
     return (
         f"Photorealistic live-action feature-film scene, shot {index + 1} of {total}. "
-        f"Story theme: {topic}. Scene action to portray on camera: {scene}. {continuity} "
-        "This must look like footage from a real dramatic movie, not an illustration, slideshow, "
-        "music visualizer, landscape montage, or abstract animation. Human actors are the subject "
-        "and must be clearly visible in frame. Show the man and woman together when appropriate; "
-        "otherwise show the character whose action is central. Give each actor a clear role and "
-        "specific visible action: walking, speaking to one another, reacting, helping, struggling, "
-        "celebrating, or expressing the emotion required by the scene. Natural facial expressions, "
-        "credible gestures, cinematic blocking, eye-level and over-the-shoulder coverage, subtle "
-        "handheld or dolly camera movement, realistic lens depth of field, practical lighting, "
-        "filmic contrast, premium feature-film cinematography. One continuous shot, no text, "
-        "no subtitles, no logos, no watermarks, no collage, no split screen, no frozen people."
+        f"Story theme: {topic}. Exact beat from the song/story, in order: {scene}. {continuity} "
+        "DIRECTOR'S RULE: illustrate the meaning of this exact beat with one clear, physically visible "
+        "human action. Do not choose a random attractive shot or generic scenery. Translate the words "
+        "into a literal mini-event with a beginning and an outcome: if the beat describes a struggle, "
+        "show the lead encountering a real obstacle; if it describes falling, show a stumble or setback; "
+        "if it describes rising or hope, show the lead standing up, taking a step, or continuing forward; "
+        "if it describes love or support, show the characters looking at, speaking to, or helping each "
+        "other. These are examples only—follow the actual beat, not an unrelated example. Keep the same "
+        "lead character, wardrobe, relationships, and chronological story across shots. Each new shot must "
+        "continue the previous story, not restart it. Human actors must be clearly visible and doing the "
+        "described action. No unrelated landscape cutaways, stock-montage feeling, visual metaphors that "
+        "ignore the lyric, or generic smiling/walking unless that is what the beat means. "
+        "Photorealistic live-action feature-film footage, natural facial expressions and believable "
+        "body mechanics, cinematic blocking, eye-level and over-the-shoulder coverage, subtle camera "
+        "movement, realistic lens depth of field, practical lighting, filmic contrast. One continuous "
+        "shot, no text, no subtitles, no logos, no watermarks, no collage, no split screen, no frozen people."
     )
 
 def generate_ai_clip(prompt: str, target: Path, size: tuple[int, int], seed: int) -> None:
@@ -295,8 +309,14 @@ st.write("**MP3 in → MP4 out.** Automatically try to generate photorealistic A
 st.info("Free-only best-effort AI generation: the app automatically calls a public Hugging Face LTX-2 open-model Space for short clips. Public free GPU availability, queue times, and quotas are not guaranteed. If generation fails, actor-first mode searches for explicitly licensed live-action footage even when stock preference is set to 0; it will stop rather than substitute abstract animation. No paid API is used.")
 
 topic = st.text_input("1. Video topic", placeholder="e.g. Never give up, motivational song")
-story = st.text_area("2. Story or scene guidance (optional)", placeholder="Write a short story or put one scene on each line.", height=120)
-song = st.file_uploader("3. Upload your MP3", type=["mp3"])
+story = st.text_area("2. Story or scene guidance (optional)", placeholder="Describe the storyline, characters, setting, and ending.", height=100)
+lyrics = st.text_area(
+    "3. Paste the song lyrics (strongly recommended for matching scenes)",
+    placeholder="Paste the lyrics in song order. Put each lyric line or verse on a new line. Punjabi, Hindi, or English are fine.",
+    height=160,
+    help="The app cannot reliably infer exact lyric meaning from an MP3 alone. Pasting lyrics lets it plan scenes around the words in order."
+)
+song = st.file_uploader("4. Upload your MP3", type=["mp3"])
 ai_clips = st.file_uploader(
     "4. Optional: override automatic generation with your own AI clips",
     type=["mp4", "mov", "m4v", "webm"], accept_multiple_files=True,
@@ -307,7 +327,7 @@ scene_count = st.slider("6. Number of scenes / AI generation attempts", 2, 8, 3)
 stock_percent = st.slider("7. Stock footage preference (%)", 0, 100, 0, 10,
     help="Set to 0 to prioritize AI-generated actor scenes. Higher values try free licensed footage, but footage may not match your exact story.")
 require_humans = st.checkbox("Prioritize real-looking male/female actors; stop rather than substitute abstract animation", value=True, help="Recommended for a movie-style result. If free AI generation and suitable footage both fail, the app will explain the failure instead of making an abstract video.")
-st.caption("Movie mode asks for visible fictional adult male and female actors performing specific actions. Free AI generation is not guaranteed; for reliable character continuity, upload your own generated actor clips if needed.")
+st.caption("For the closest lyric-to-action match, paste the lyrics above in the correct order. Without lyrics, the app only has your topic/story and cannot know what each sung line means. Free video models may still imperfectly follow prompts.")
 
 if st.button("Generate MP4", type="primary", disabled=not (topic.strip() and song)):
     if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
@@ -325,7 +345,7 @@ if st.button("Generate MP4", type="primary", disabled=not (topic.strip() and son
                 audio = work / "song.mp3"
                 audio.write_bytes(song.getvalue())
                 duration = probe_duration(audio)
-                scenes = make_scenes(topic.strip(), story, scene_count)
+                scenes = make_scenes(topic.strip(), story, lyrics, scene_count)
                 # Make short music-video shots, then cycle the scene montage to cover the full song.
                 # This avoids stretching one 3-second AI clip across a long section of audio.
                 scene_seconds = min(4.0, duration / scene_count)
